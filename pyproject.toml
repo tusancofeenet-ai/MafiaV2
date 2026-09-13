@@ -2,15 +2,24 @@
 name = "mafia-nights"
 version = "0.1.0"
 description = "Mafia Nights Telegram bot"
-requires-python = ">=3.12,<3.15"
+requires-python = ">=3.12,<3.14"
 dependencies = [
   "aiogram==2.25.1",
+  "aiohttp>=3.9.5,<4.0",
+  "SQLAlchemy>=2.0,<3.0",
+  "psycopg2-binary>=2.9,<3.0",
+  "jdatetime",
 ]
 
+# aiogram 2.25.1 declares an overly strict aiohttp<3.9 constraint, while
+# Vercel's supported Python runtime is newer than the Python versions on
+# which aiohttp 3.8.x can be built. aiogram 2.25.1 works with aiohttp 3.9.x;
+# uv override-dependencies intentionally replaces only that stale resolver
+# constraint for the serverless webhook build.
 [tool.uv]
 override-dependencies = [
-  "aiohttp==3.9.5",
+  "aiohttp>=3.9.5,<4.0",
 ]
 
 [tool.vercel]
-entrypoint = "api.telegram.webhook:app"
+entrypoint = "api.telegram_app:app"

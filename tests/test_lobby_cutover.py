@@ -22,6 +22,10 @@ class FakeLobby:
         self.calls.append(("join", group, uid, seat))
         return {"player_id": uid, "seat": seat}
 
+    def assign_seat(self, group, uid, seat):
+        self.calls.append(("assign", group, uid, seat))
+        return {"player_id": uid, "seat": seat}
+
     def leave(self, group, uid):
         self.calls.append(("leave", group, uid))
         return True

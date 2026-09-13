@@ -30,7 +30,7 @@ class FakeRuntime:
         self._day = day or {"day": 2, "phase": "day"}
 
     def snapshot(self, group_id):
-        return {"game": self.state.game, "turn": None, "challenge": self._pending}
+        return {"game": self.state.games.game, "turn": None, "challenge": self._pending}
 
     def day_snapshot(self, group_id):
         return self._day

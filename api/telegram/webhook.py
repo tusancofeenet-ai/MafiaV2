@@ -7,7 +7,8 @@ import os
 from typing import Any
 
 _seen_updates: set[int] = set()
-_app: Any = None
+_runtime_module: Any = None
+_startup_complete = False
 
 
 def _response(body: dict[str, Any], status: str = "200 OK") -> tuple[str, list[tuple[str, str]], bytes]:
@@ -23,24 +24,39 @@ def _authorized(environ: dict[str, Any]) -> bool:
     return actual == expected
 
 
-def _get_application() -> Any:
-    global _app
-    if _app is None:
-        from main_refactored_v4 import MafiaApplicationV4
+def _get_runtime() -> Any:
+    """Return the canonical patched production module.
 
-        token = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("API_TOKEN")
-        if not token:
-            raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
-        _app = MafiaApplicationV4(token)
-    return _app
+    player_runtime_entry imports main1 and installs the complete production
+    patch stack. main1 is an aiogram module container, not a WSGI application,
+    so the webhook dispatches through its Dispatcher directly.
+    """
+    global _runtime_module
+    if _runtime_module is None:
+        import player_runtime_entry as runtime_entry
+        _runtime_module = runtime_entry
+    return _runtime_module
+
+
+async def _ensure_startup() -> None:
+    """Run canonical production startup once per warm Vercel instance."""
+    global _startup_complete
+    if _startup_complete:
+        return
+
+    runtime_entry = _get_runtime()
+    await runtime_entry.on_startup(runtime_entry.main.dp)
+    _startup_complete = True
 
 
 async def _dispatch(payload: dict[str, Any]) -> None:
-    from aiogram import types
+    from aiogram import Bot, types
 
-    app = _get_application()
+    runtime_entry = _get_runtime()
+    await _ensure_startup()
     update = types.Update(**payload)
-    await app.dp.process_update(update)
+    Bot.set_current(runtime_entry.main.bot)
+    await runtime_entry.main.dp.process_update(update)
 
 
 def app(environ: dict[str, Any], start_response: Any) -> list[bytes]:
@@ -91,11 +107,19 @@ def app(environ: dict[str, Any], start_response: Any) -> list[bytes]:
             _seen_updates.clear()
             _seen_updates.add(update_id)
 
-    asyncio.run(_dispatch(payload))
+    try:
+        asyncio.run(_dispatch(payload))
+    except Exception:
+        import logging
+        logging.exception("Telegram webhook dispatch failed")
+        status, headers, body = _response({"ok": False, "error": "dispatch_failed"}, "200 OK")
+        start_response(status, headers)
+        return [body]
+
     status, headers, body = _response({"ok": True})
     start_response(status, headers)
     return [body]
 
 
-# Explicit alias retained for deployments/tests that import ``handler``.
 handler = app
+main = app

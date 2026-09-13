@@ -1,7 +1,19 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
+  "fluid": true,
+  "regions": ["iad1"],
   "routes": [
-    { "src": "/api/telegram/webhook", "dest": "/api/telegram/webhook.py" },
-    { "src": "/api/telegram/setup", "dest": "/api/telegram/setup.py" }
-  ]
+    { "src": "/api/telegram/webhook", "dest": "/api/telegram_app.py" },
+    { "src": "/api/telegram/setup", "dest": "/api/telegram_app.py" },
+    { "src": "/api/telegram/tick", "dest": "/api/telegram/tick.py" }
+  ],
+  "functions": {
+    "api/telegram_app.py": {
+      "maxDuration": 300
+    },
+    "api/telegram/tick.py": {
+      "maxDuration": 60
+    }
+  }
 }

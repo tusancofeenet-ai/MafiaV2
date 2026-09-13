@@ -2,7 +2,13 @@
 
 ## Architecture
 
-The migration branch contains persistent infrastructure for:
+The repository now uses the clean production entry point and persistent runtime boundary:
+
+`main.py` → `MafiaApplicationV4` → `FeatureParityV4` → `PersistentGameRuntime` / persistent state → Telegram UI.
+
+The legacy implementation remains in `main1.py` only as rollback/reference code. It is not imported by the production entry point.
+
+Persistent infrastructure covers:
 
 - Player/profile persistence
 - Scenario persistence
@@ -12,22 +18,24 @@ The migration branch contains persistent infrastructure for:
 - Day/night repository boundary through persisted game state
 - Unified `PersistentGameRuntime`
 - `GameStateMachine`
-- Production bootstrap bridge
+- Production bootstrap and persistence composition
 - Restart recovery and legacy-state hydration
 - Lobby cut-over middleware
-- Day/night cut-over compatibility bridge
+- Day/night compatibility bridge
 - Legacy-state authority boundary
 - Restart-safe ephemeral recovery manager
 
-## Current cut-over boundary
+## Current production boundary
 
-`main.py` remains the legacy Telegram implementation, while `player_runtime_entry.py` is the migration production entry point. It installs the player/profile bridge, attaches one shared `PersistentGameRuntime`, installs Turn/Challenge/Lobby/Day compatibility cut-overs plus the legacy-state authority boundary, and runs persistent recovery before polling.
+`main.py` is the canonical production entry point. It constructs the clean application, installs the composed persistence layer, and starts polling only when executed as the process entry point.
 
-The cut-over layers deliberately preserve the existing Telegram UX. Legacy callbacks continue to render and validate the UI, while authoritative game state is written to persistence before/around the legacy transition. This avoids a risky bulk rewrite of the 138KB legacy handler module while making restart recovery possible.
+`Dockerfile` also targets `python main.py`.
+
+The webhook adapter imports the canonical `main.app`; it no longer boots the legacy runtime entry point.
 
 ## State authority contract
 
-The database/persistent runtime is the source of truth. Legacy globals are classified as follows:
+The database/persistent runtime is the source of truth for durable game state. Compatibility handlers may maintain process-local UI state, but durable game/player/turn/challenge/lobby/day mutations are written through the persistent runtime.
 
 ### Persisted authoritative state
 
@@ -37,86 +45,44 @@ The database/persistent runtime is the source of truth. Legacy globals are class
 - `current_turn_seat`
 - `players_in_game`
 - `extra_turns`
-
-These values are persisted under the active game's state/current-turn columns and are rehydrated before subsequent group updates. Legacy mutations are treated as compatibility commands and captured back into persistence; they are not durable state by themselves.
+- feature-parity compatibility state such as substitutes, removed players, challenge requests, pending challenges and Next settings
 
 ### Derived compatibility state
 
-- `waiting_list`
-- `pending_challenges`
-- `challenge_requests`
-- `active_challenger_seats`
-- `challenge_mode`
-- `paused_main_player`
-- `paused_main_duration`
-- `post_challenge_advance`
-- `day_number`
-- `day_phase`
-- `game_running`
-- `lobby_active`
-- `moderator_id`
-- `selected_scenario`
-
-These are rebuilt from the persistent snapshot/runtime and must not be used as independent durable truth.
+Legacy compatibility views such as waiting/lobby flags, day/phase aliases and selected-scenario views are reconstructed from the persisted snapshot/runtime and are not independent durable truth.
 
 ### Ephemeral process/UI state
 
-- Telegram message IDs (`game_message_id`, `lobby_message_id`, `current_turn_message_id`, `waiting_message_id`)
-- asyncio timer task handles (`turn_timer_task`)
-- local anti-spam timestamp (`last_next_time`)
+- Telegram message IDs
+- asyncio timer task handles
+- local anti-spam timestamps
 
-They may exist in memory but are intentionally not persisted as game truth.
+These values are intentionally not persisted as game truth.
 
-## Runtime rules
+## Validation status
 
-1. Database state is authoritative for game/player/turn/challenge/lobby/day state.
-2. Telegram message IDs and asyncio timer tasks are ephemeral process state.
-3. Startup recovery reconstructs the persisted snapshot and safely finishes expired turns.
-4. Lobby hydration reconstructs seats, waiting list, moderator and scenario before the next group handler.
-5. Lobby persistence mirrors seat assignments, waiting-list membership, moderator, scenario and lobby metadata after legacy handlers mutate them.
-6. Turn and challenge callbacks use compatibility bridges so persistence is updated before legacy Telegram UI continues.
-7. Day/night transitions persist the phase and day number and reset the persisted turn pointer before the legacy callback executes.
-8. The state-authority middleware hydrates the compatibility view before group updates and captures only the supported compatibility state after handlers; dedicated lifecycle cut-overs remain responsible for transactional lobby/turn/challenge/day operations.
-9. Do not reconcile lobby membership after the game has entered the running state; active game participants are protected from incomplete legacy lobby globals.
-10. `EphemeralRecoveryManager` rebuilds one asyncio timer per persisted active turn from `started_at + duration_seconds`, and re-checks the current persisted turn before expiry dispatch.
-11. Restart recovery clears stale process-local Telegram message/task handles and resets the local anti-spam timestamp.
-12. Pending challenges are re-exposed as recovery metadata; optional Telegram UI hooks can rebuild lobby/turn/challenge messages without making message IDs persistent truth.
-13. A recovered expiry is serialized by an asyncio lock and a short duplicate-dispatch guard; stale turn IDs are ignored.
+The clean entry point is covered by automated contract tests. The validation workflow performs dependency installation, Python compilation and the complete `tests/` suite.
 
-## Cut-over checklist
+Latest validated run:
 
-- [x] Persistent lobby foundation
-- [x] Persistent turn foundation
-- [x] Persistent challenge foundation
-- [x] Unified runtime facade
-- [x] State-machine boundary
-- [x] Production entry point activates persistent runtime
-- [x] Startup recovery hook
-- [x] Restart hydration of legacy UI/session state
-- [x] Turn/timer compatibility bridge installed by production entry point
-- [x] Challenge compatibility bridge installed by production entry point
-- [x] Day persistence runtime
-- [x] Lobby persistence cut-over boundary installed
-- [x] Lobby seat/waiting-list synchronization
-- [x] Lobby moderator/scenario synchronization
-- [x] Lobby restart hydration
-- [x] Duplicate-seat protection at repository boundary
-- [x] Legacy day/night transition compatibility bridge
-- [x] Persisted day number and phase hydration
-- [x] Persisted turn pointer reset at day/night boundary
-- [x] Legacy global state authority boundary installed
-- [x] Authoritative/derived/ephemeral global classification documented
-- [x] Compatibility state hydration before group updates
-- [x] Compatibility mutations captured into persistent state
-- [x] Restart-safe ephemeral recovery manager installed
-- [x] Exact persisted turn deadline recovery
-- [x] Duplicate/stale timer protection
-- [x] Challenge recovery metadata
-- [x] Optional Telegram UI recovery hooks
-- [x] Production Docker entrypoint uses `player_runtime_entry.py`
-- [ ] Remove legacy global containers from `main.py` entirely
-- [ ] End-to-end integration tests against the real bot/DB
+- Python 3.11
+- compileall: passed
+- test suite: passed
+- clean entrypoint import contract: passed
+- total tests in the latest validation: 72 passed
 
-## Safety
+The tests intentionally use isolated/fake persistence where appropriate; they do not require a production Telegram token.
 
-Keep migration work on `refactor/state-migration` until the bot can be exercised end-to-end. Do not merge this branch into production solely because the persistence layer is complete.
+## Remaining production gate
+
+A live Telegram + production database smoke test still requires deployment/runtime credentials and an actual test group. This is an operational validation step, not a reason to create another runtime implementation.
+
+Before the first production deployment of this cutover, verify:
+
+1. `API_TOKEN` is configured in the hosting environment.
+2. `DATABASE_URL` points to the production PostgreSQL/Supabase database.
+3. The bot can initialize persistence and recover an active game.
+4. A controlled test group can execute lobby → seats → role distribution → turn → challenge → day/night → restart recovery.
+5. The webhook, if enabled, points to the canonical `main.app` adapter.
+
+No additional feature-parity implementation should be created until this operational smoke test is complete.

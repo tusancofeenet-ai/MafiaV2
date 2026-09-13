@@ -104,7 +104,9 @@ class EphemeralRecoveryManager:
                     "finish_reason": "timer_expired_after_restart",
                 })
             self.main.turn_timer_task = None
-            self.main.recovered_turn_plans.pop(plan.group_chat_id, None)
+            recovered = getattr(self.main, "recovered_turn_plans", None)
+            if isinstance(recovered, dict):
+                recovered.pop(plan.group_chat_id, None)
 
     async def start(self) -> list[RecoveryPlan]:
         """Hydrate UI metadata, rebuild optional UI, and schedule exact deadlines."""

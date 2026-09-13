@@ -1,12 +1,14 @@
 # Feature parity finalization
 
-## Target
+## Production target
 
-`main_refactored_v4.py` is the current clean migration target. It leaves `main.py` untouched as the rollback/reference implementation.
+`main.py` is the canonical production entry point.
 
 Architecture:
 
-`main_refactored.py` → `FeatureParityV4` → persistent runtime/state authority → ephemeral Telegram runtime.
+`main.py` → `MafiaApplicationV4` → `FeatureParityV4` → persistent runtime/state authority → ephemeral Telegram runtime.
+
+The legacy implementation remains in `main1.py` only as rollback/reference material and is not imported by production.
 
 ## Migrated user-facing surface
 
@@ -30,18 +32,24 @@ Architecture:
 - next permissions for players/moderator
 - next anti-spam setting
 - game cancellation
-- addon compatibility remains available through the clean application's addon object
+- addon compatibility through the clean application's addon layer
 
-## Legacy callback aliases
+## Callback compatibility
 
-The target accepts the principal legacy callback names (`join_game`, `leave_game`, `slot_*`, `join_waiting`, `reserve_waiting`, `leave_waiting`, `cancel_waiting`, `challenge_toggle`, `accept_before_*`, `accept_after_*`, `reject_*`, etc.) through the parity layer.
+The parity layer supports the principal clean `fp:*` callbacks and the required legacy callback aliases, including lobby join/leave/seat, waiting-list actions, challenge actions and management-panel actions.
 
 ## State policy
 
-No new module-level mutable game containers were introduced. Substitute lists, removed players, challenge requests, pending challenges, paused-turn metadata and Next settings are stored in the active game's persisted `state` document. Telegram message IDs and asyncio Tasks remain process-local.
+No new module-level mutable game containers were introduced by the cutover. Substitute lists, removed players, challenge requests, pending challenges, paused-turn metadata and Next settings are stored in the active game's persisted state. Telegram message IDs and asyncio task handles remain process-local UI state.
 
-## Known boundary
+## Validation
 
-The legacy source contains duplicate handlers and some historical undefined references. Those broken implementation details are not copied. The target implements their intended user-visible capabilities through the persistent runtime.
+The clean entry point is covered by automated tests. The CI validation workflow performs dependency installation, Python compilation and the complete test suite. The latest validated suite reports **72 passed**.
 
-Real Telegram + Supabase E2E execution remains the final validation gate before production cut-over.
+The bootstrap contract also verifies that importing `main.py` constructs the clean application without starting polling and that persistence is installed through the canonical composition layer.
+
+## Operational gate
+
+Live Telegram + production PostgreSQL/Supabase smoke testing remains an operational requirement before the first production deployment. It requires valid runtime credentials and a controlled Telegram test group.
+
+No additional `v5`/`v6` runtime should be created for this gate. Fixes belong in the existing canonical modules.

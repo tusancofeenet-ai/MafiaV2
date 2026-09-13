@@ -19,6 +19,9 @@ class FakeState:
     def __init__(self):
         self.games = FakeGames()
 
+    def active_game(self, group_id):
+        return self.games.get_active_game(group_id)
+
 
 class FakeTurns:
     def current(self, group_id):

@@ -1,4 +1,4 @@
-"""Runtime cut-over helpers for legacy turn/timer callbacks."""
+"""Runtime cut-over helpers for legacy Telegram turn/timer callbacks."""
 from __future__ import annotations
 
 import asyncio
@@ -11,13 +11,22 @@ from runtime.migration_adapter import MigrationAdapter
 
 
 async def persistent_countdown(legacy: Any, adapter: MigrationAdapter, seat: int, duration: int, message_id: int, is_challenge: bool = False) -> None:
-    """Render the legacy timer while deriving its lifetime from persisted state."""
+    """Render the legacy timer with a DB-independent fallback."""
     group_id = getattr(legacy, "group_chat_id", None)
     if not group_id:
         return
+
+    # The Telegram game UI must not die because Supabase/Postgres is temporarily
+    # unreachable from a serverless IPv6 runtime. Persistence is best-effort;
+    # the live timer can safely fall back to a local deadline.
     try:
         recovery = adapter.recover_turn(int(group_id))
         deadline = recovery.get("deadline_epoch") or (time.time() + int(duration))
+    except Exception:
+        logging.warning("persistent turn recovery unavailable; using local timer fallback", exc_info=True)
+        deadline = time.time() + int(duration)
+
+    try:
         while True:
             remaining = max(0, int(round(deadline - time.time())))
             user_id = (getattr(legacy, "player_slots", {}) or {}).get(seat)
@@ -30,13 +39,23 @@ async def persistent_countdown(legacy: Any, adapter: MigrationAdapter, seat: int
                 pass
             text = f"{prefix} ⏳ {remaining // 60:02d}:{remaining % 60:02d}\n🎙 نوبت صحبت {mention} است. ({remaining} ثانیه)"
             try:
-                await legacy.bot.edit_message_text(text, chat_id=int(group_id), message_id=message_id, parse_mode="HTML", reply_markup=legacy.turn_keyboard(seat, is_challenge))
+                await legacy.bot.edit_message_text(
+                    text,
+                    chat_id=int(group_id),
+                    message_id=message_id,
+                    parse_mode="HTML",
+                    reply_markup=legacy.turn_keyboard(seat, is_challenge),
+                )
             except Exception:
                 pass
             if remaining <= 0:
                 break
             await asyncio.sleep(min(5, remaining))
-        adapter.finish_current_turn(int(group_id), reason="timer_expired")
+
+        try:
+            adapter.finish_current_turn(int(group_id), reason="timer_expired")
+        except Exception:
+            logging.warning("could not persist timer expiry; continuing UI-only", exc_info=True)
         try:
             await legacy.send_temp_message(int(group_id), f"⏳ زمان {mention} به پایان رسید.", delay=5)
         except Exception:
@@ -61,9 +80,10 @@ async def bridged_next_turn(legacy: Any, adapter: MigrationAdapter, callback: An
                     )
             adapter.finish_current_turn(int(group_id), reason="next")
         except Exception:
-            logging.exception("persistent current-turn completion failed")
-            await callback.answer("⚠️ ثبت پایان نوبت انجام نشد؛ نکست اجرا نشد.", show_alert=True)
-            return
+            # Turn transition must continue even if persistence is temporarily
+            # unavailable. The UI/legacy state remains authoritative for this
+            # request and can be reconciled on the next persistent recovery.
+            logging.warning("persistent current-turn completion unavailable; continuing legacy transition", exc_info=True)
     return await original(callback)
 
 

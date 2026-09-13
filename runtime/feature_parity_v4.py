@@ -1,79 +1,53 @@
-"""Final compatibility aliases for legacy lobby/seat callbacks."""
+"""Feature-parity v4.
+
+Lobby ownership is intentionally absent here. The production lobby is owned
+exclusively by ``runtime.production_lobby``; this layer extends the
+non-lobby feature parity surface and applies scenario-specific challenge
+quotas.
+"""
 from __future__ import annotations
 
-import html
-
-from aiogram import types
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
 from runtime.feature_parity_v3 import FeatureParityV3
+from runtime.scenario_challenge_policy import ScenarioChallengePolicy
 
 
 class FeatureParityV4(FeatureParityV3):
-    async def legacy_join(self, callback: types.CallbackQuery):
-        # Reuse the authoritative clean join implementation.
-        await self.app.join(callback)
+    """Final feature-parity layer with scenario-aware challenge quotas."""
 
-    async def legacy_leave(self, callback: types.CallbackQuery):
-        await self.app.leave(callback)
+    def __init__(self, app):
+        super().__init__(app)
+        self.challenge_policy = ScenarioChallengePolicy(app)
 
-    async def slot(self, callback: types.CallbackQuery):
-        group_id = callback.message.chat.id
-        seat = int(callback.data.rsplit("_", 1)[1])
-        game = self._game(group_id)
-        if not game or game.get("status") != "lobby":
-            await callback.answer("⚠️ لابی فعال نیست.", show_alert=True)
+    async def challenge_request(self, callback):
+        group_id = int(callback.message.chat.id)
+        challenger = int(callback.from_user.id)
+        target_seat = int(str(callback.data).rsplit(":", 1)[1])
+
+        allowed, reason, key = self.challenge_policy.check(group_id, challenger)
+        if not allowed:
+            await callback.answer(reason, show_alert=True)
             return
-        rows = self.app._players_by_seat(group_id)
-        uid = int(callback.from_user.id)
-        current = next((s for s, row in rows.items() if int(row["player_id"]) == uid), None)
-        if current == seat:
-            self.app.runtime.lobby.leave(group_id, uid)
-            await callback.answer("جایگاه آزاد شد.")
-        elif seat in rows:
-            await callback.answer("❌ این صندلی قبلاً رزرو شده است.", show_alert=True)
+
+        game_before = self._game(group_id)
+        state_before = dict((game_before or {}).get("state") or {})
+        pending_before = dict(state_before.get("challenge_requests") or {})
+        bucket_before = dict(pending_before.get(str(target_seat)) or {})
+        was_pending = str(challenger) in bucket_before
+
+        # The base handler performs the existing target/self/pending/enable
+        # checks and creates the challenge request.
+        await super().challenge_request(callback)
+
+        if was_pending:
             return
-        else:
-            if current is not None:
-                self.app.runtime.lobby.leave(group_id, uid)
-            self.app.runtime.lobby.join(group_id, uid, seat)
-            await callback.answer(f"✅ صندلی {seat} برای شما رزرو شد.")
-        await self.app._render_lobby(group_id)
 
-    async def waiting_join(self, callback: types.CallbackQuery):
-        group_id = callback.message.chat.id
-        uid = int(callback.from_user.id)
-        rows = self.app._players_by_seat(group_id)
-        if any(int(row["player_id"]) == uid for row in rows.values()):
-            await callback.answer("❌ شما در لیست اصلی هستید.", show_alert=True)
-            return
-        subs = self._substitutes(group_id)
-        if str(uid) not in subs:
-            subs[str(uid)] = {"id": uid, "name": callback.from_user.full_name}
-            await self._save_state(group_id, substitutes=subs)
-            await callback.answer("📌 شما به لیست رزرو اضافه شدید.")
-        else:
-            await callback.answer("⚠️ شما قبلاً در لیست رزرو هستید.", show_alert=True)
-
-    async def waiting_leave(self, callback: types.CallbackQuery):
-        group_id = callback.message.chat.id
-        uid = str(callback.from_user.id)
-        subs = self._substitutes(group_id)
-        if subs.pop(uid, None):
-            await self._save_state(group_id, substitutes=subs)
-            await callback.answer("✅ از لیست رزرو خارج شدید.")
-        else:
-            await callback.answer("⚠️ شما در لیست رزرو نیستید.", show_alert=True)
-
-    async def toggle_challenge_legacy(self, callback: types.CallbackQuery):
-        await self.app.toggle_challenge(callback)
+        game_after = self._game(group_id)
+        state_after = dict((game_after or {}).get("state") or {})
+        pending_after = dict(state_after.get("challenge_requests") or {})
+        bucket_after = dict(pending_after.get(str(target_seat)) or {})
+        if bucket_after.get(str(challenger)) == "pending":
+            mode = self.challenge_policy.mode(group_id)
+            self.challenge_policy.mark(group_id, challenger, key, mode)
 
     def register(self):
         super().register()
-        dp = self.app.dp
-        dp.register_callback_query_handler(self.legacy_join, lambda c: c.data == "join_game")
-        dp.register_callback_query_handler(self.legacy_leave, lambda c: c.data == "leave_game")
-        dp.register_callback_query_handler(self.slot, lambda c: c.data.startswith("slot_"))
-        dp.register_callback_query_handler(self.waiting_join, lambda c: c.data in {"join_waiting", "reserve_waiting"})
-        dp.register_callback_query_handler(self.waiting_leave, lambda c: c.data in {"leave_waiting", "cancel_waiting"})
-        dp.register_callback_query_handler(self.toggle_challenge_legacy, lambda c: c.data == "challenge_toggle")

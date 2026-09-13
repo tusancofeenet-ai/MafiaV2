@@ -14,6 +14,7 @@ class Phase(str, Enum):
     RUNNING = "running"
     TURN = "turn"
     CHALLENGE = "challenge"
+    VOTING = "voting"
     PAUSED = "paused"
     FINISHED = "finished"
 
@@ -39,13 +40,17 @@ class GameStateMachine:
             return {"phase": Phase.FINISHED.value, "game": None, "turn": None, "challenge": None}
         turn = self.turns.current(group_chat_id)
         pending = self.challenges.pending(group_chat_id)
+        payload = dict(game.get("state") or {})
         raw_status = str(game.get("status") or "lobby").lower()
+        day_phase = str(payload.get("day_phase") or payload.get("phase") or "").lower()
         if raw_status in {"finished", "ended", "cancelled"}:
             phase = Phase.FINISHED
         elif raw_status == "paused":
             phase = Phase.PAUSED
         elif raw_status in {"lobby", "waiting"}:
             phase = Phase.LOBBY
+        elif day_phase == Phase.VOTING.value or isinstance(payload.get("voting"), dict) and payload.get("voting", {}).get("phase") in {"waiting", "voting", "round_finished"}:
+            phase = Phase.VOTING
         elif pending:
             phase = Phase.CHALLENGE
         elif turn:
@@ -62,10 +67,11 @@ class GameStateMachine:
         current = Phase(raw_current) if raw_current in {p.value for p in Phase} else Phase.LOBBY
         allowed = {
             Phase.LOBBY: {Phase.RUNNING, Phase.FINISHED},
-            Phase.RUNNING: {Phase.TURN, Phase.FINISHED},
-            Phase.TURN: {Phase.CHALLENGE, Phase.RUNNING, Phase.FINISHED},
-            Phase.CHALLENGE: {Phase.TURN, Phase.PAUSED, Phase.RUNNING, Phase.FINISHED},
-            Phase.PAUSED: {Phase.CHALLENGE, Phase.TURN, Phase.RUNNING, Phase.FINISHED},
+            Phase.RUNNING: {Phase.TURN, Phase.VOTING, Phase.FINISHED},
+            Phase.TURN: {Phase.CHALLENGE, Phase.RUNNING, Phase.VOTING, Phase.FINISHED},
+            Phase.CHALLENGE: {Phase.TURN, Phase.PAUSED, Phase.RUNNING, Phase.VOTING, Phase.FINISHED},
+            Phase.VOTING: {Phase.RUNNING, Phase.FINISHED},
+            Phase.PAUSED: {Phase.CHALLENGE, Phase.TURN, Phase.RUNNING, Phase.VOTING, Phase.FINISHED},
             Phase.FINISHED: set(),
         }
         if target not in allowed[current] and target != current:
@@ -74,11 +80,9 @@ class GameStateMachine:
         return Transition(target, current, game["id"])
 
     def recover(self, group_chat_id: int) -> dict[str, Any]:
-        """Return a restart-safe snapshot including the persisted turn recovery data."""
         turn = self.turns.recover(group_chat_id)
         snapshot = self.snapshot(group_chat_id)
         return {"snapshot": snapshot, "turn_recovery": turn}
 
     def recover_all(self) -> list[dict[str, Any]]:
-        """Recover every persisted game that can survive a process restart."""
         return [self.recover(int(game["group_chat_id"])) for game in self.state.active_games()]

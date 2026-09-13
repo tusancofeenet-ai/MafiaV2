@@ -9,6 +9,9 @@ class FakeGameRepository:
     def get_active_game(self, group_chat_id):
         return self.game
 
+    def next_event_number(self, group_chat_id):
+        return 1
+
     def create_game(self, **kwargs):
         self.game = {"id": "game-1", "group_chat_id": kwargs["group_chat_id"]}
         return "game-1"

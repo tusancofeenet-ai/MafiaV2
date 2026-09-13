@@ -26,34 +26,32 @@ def test_paused_is_first_class_phase():
     assert Phase.PAUSED.value == "paused"
 
 
-def test_paused_transition_contract():
+def make_machine(status):
     class Games:
         def update_game(self, *args, **kwargs):
             return None
 
     class State:
         games = Games()
+        turns = object()
+        challenges = object()
 
         def active_game(self, group_chat_id):
-            return {"id": "game-1", "status": "paused"}
+            return {"id": "game-1", "status": status}
 
-    machine = GameStateMachine(State())
+    machine = GameStateMachine.__new__(GameStateMachine)
+    machine.state = State()
+    return machine
+
+
+def test_paused_transition_contract():
+    machine = make_machine("paused")
     result = machine.transition(1, Phase.TURN)
     assert result.previous_phase is Phase.PAUSED
     assert result.phase is Phase.TURN
 
 
 def test_invalid_transition_from_finished():
-    class Games:
-        def update_game(self, *args, **kwargs):
-            return None
-
-    class State:
-        games = Games()
-
-        def active_game(self, group_chat_id):
-            return {"id": "game-1", "status": "finished"}
-
-    machine = GameStateMachine(State())
+    machine = make_machine("finished")
     with pytest.raises(ValueError):
         machine.transition(1, Phase.TURN)

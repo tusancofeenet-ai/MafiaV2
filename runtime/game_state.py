@@ -5,6 +5,7 @@ from typing import Any, Optional
 from repositories.game_repository import GameRepository
 from repositories.turn_repository import TurnRepository
 from repositories.challenge_repository import ChallengeRepository
+from repositories.scenario_repository import ScenarioRepository
 from services.lobby_service import LobbyService
 
 
@@ -19,6 +20,7 @@ class GameState:
         self.games = GameRepository()
         self.turns = TurnRepository()
         self.challenges = ChallengeRepository()
+        self.scenarios = ScenarioRepository()
         self.lobby = LobbyService(self.games)
 
     def active_game(self, group_chat_id: int):

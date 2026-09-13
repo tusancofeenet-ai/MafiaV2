@@ -6,7 +6,6 @@ application during migration and can later be split into smaller services.
 """
 from __future__ import annotations
 
-import asyncio
 import html
 from typing import Any, Optional
 
@@ -26,7 +25,6 @@ class FeatureParity:
     def __init__(self, app):
         self.app = app
 
-    # ---------- persistent compatibility state ----------
     def _game(self, group_id: int) -> Optional[dict[str, Any]]:
         return self.app.runtime.state.active_game(group_id)
 
@@ -40,11 +38,12 @@ class FeatureParity:
             return False
         state = self._state(group_id)
         state.update(changes)
+        if isinstance(game, dict):
+            game["state"] = dict(state)
         self.app.runtime.state.games.update_game(game["id"], state=state)
         return True
 
     def _admin_ids(self, group_id: int) -> set[int]:
-        # Synchronous helper for state/keyboard paths; async checks are done in handlers.
         game = self._game(group_id)
         stored = (game or {}).get("state") or {}
         return {int(x) for x in stored.get("admin_ids", [])}
@@ -81,7 +80,6 @@ class FeatureParity:
     def _removed(self, group_id: int) -> dict[str, dict[str, Any]]:
         return dict(self._state(group_id).get("removed_players") or {})
 
-    # ---------- private management panel ----------
     def panel_keyboard(self, group_id: int) -> InlineKeyboardMarkup:
         settings = self._next_settings(group_id)
         kb = InlineKeyboardMarkup(row_width=1)
@@ -185,11 +183,10 @@ class FeatureParity:
             return
         uid = int(row["player_id"])
         removed = self._removed(group_id)
-        removed[str(seat)] = {"id": uid, "name": self.app._name(uid), "role": (self._state(group_id).get("last_role_map") or {}).get(str(uid)}
+        removed[str(seat)] = {"id": uid, "name": self.app._name(uid), "role": (self._state(group_id).get("last_role_map") or {}).get(str(uid))}
         players = dict(self._state(group_id).get("players_in_game") or {})
         players.pop(str(seat), None)
         await self._save_state(group_id, removed_players=removed, players_in_game=players)
-        # Keep lobby/player persistence authoritative: mark the seat/player inactive when supported.
         try:
             self.app.runtime.lobby.leave(group_id, uid)
         except Exception:
@@ -262,7 +259,7 @@ class FeatureParity:
         await callback.answer()
 
     async def replace_confirm(self, callback: types.CallbackQuery):
-        group_id = self.app.ui.group_chat_id
+        group_id = callback.message.chat.id
         if not group_id or not await self._is_admin(callback, group_id):
             await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
             return
@@ -306,13 +303,12 @@ class FeatureParity:
             await message.reply("ℹ️ شما قبلاً در لیست جایگزین هستید.")
             return
         subs[str(uid)] = {"id": uid, "name": message.from_user.full_name}
-        await self._save_state(group_id, substitutes=subs)
+        self._save_state(group_id, substitutes=subs)
         await message.reply(f"✅ {html.escape(message.from_user.full_name)} به لیست جایگزین اضافه شد.")
 
     async def seat_command(self, message: types.Message):
-        group_id = message.chat.id
+        rows = self.app._players_by_seat(message.chat.id)
         uid = int(message.from_user.id)
-        rows = self.app._players_by_seat(group_id)
         seat = next((s for s, row in rows.items() if int(row["player_id"]) == uid), None)
         await message.reply(f"🔹 شما در صندلی شماره {seat} هستید." if seat else "⚠️ شما در بازی ثبت نشده‌اید.")
 
@@ -321,8 +317,7 @@ class FeatureParity:
         if not rows:
             await message.reply("🚫 هیچ لیست صندلی فعالی وجود ندارد.")
             return
-        text = "📋 لیست صندلی‌ها:\n\n" + "\n".join(f"{s:02d}. {html.escape(self.app._name(int(r['player_id'])))}" for s, r in sorted(rows.items()))
-        await message.reply(text)
+        await message.reply("📋 لیست صندلی‌ها:\n\n" + "\n".join(f"{s:02d}. {html.escape(self.app._name(int(r['player_id'])))}" for s, r in sorted(rows.items())))
 
     async def role_command(self, message: types.Message):
         if message.chat.type != "private":
@@ -341,14 +336,7 @@ class FeatureParity:
         rows = self.app._players_by_seat(group_id)
         day = self.app.runtime.day_snapshot(group_id)
         turn = self.app.runtime.current_turn(group_id)
-        text = (
-            "🔎 <b>وضعیت بازی</b>\n\n"
-            f"👥 بازیکنان: {len(rows)}\n"
-            f"📝 سناریو: {game.get('scenario_id') or '---'}\n"
-            f"🎩 گرداننده: {self.app._name(int(game.get('moderator_id'))) if game.get('moderator_id') else '---'}\n"
-            f"🎯 نوبت فعلی: {turn.get('seat') if turn else '---'}\n"
-            f"🌞/🌙 فاز: {(day or {}).get('phase') or game.get('status') or '---'}"
-        )
+        text = ("🔎 <b>وضعیت بازی</b>\n\n" f"👥 بازیکنان: {len(rows)}\n" f"📝 سناریو: {game.get('scenario_id') or '---'}\n" f"🎩 گرداننده: {self.app._name(int(game.get('moderator_id'))) if game.get('moderator_id') else '---'}\n" f"🎯 نوبت فعلی: {turn.get('seat') if turn else '---'}\n" f"🌞/🌙 فاز: {(day or {}).get('phase') or game.get('status') or '---'}")
         await message.reply(text, parse_mode="HTML")
 
     async def players_command(self, message: types.Message):
@@ -379,7 +367,6 @@ class FeatureParity:
         mentions = " ".join(f"<a href='tg://user?id={a.user.id}'>{html.escape(a.user.full_name or str(a.user.id))}</a>" for a in admins)
         await message.reply("📢 تگ مدیران گروه:\n" + mentions, parse_mode="HTML")
 
-    # ---------- challenge response ----------
     async def challenge_request(self, callback: types.CallbackQuery):
         group_id = callback.message.chat.id
         if not self.app.challenge_enabled.get(group_id, True):
@@ -455,7 +442,6 @@ class FeatureParity:
         await self.app.start_turn(group_id, challenger_seat, self.app._current_index(group_id), challenge=True)
         await callback.answer("⚔ چالش قبل از صحبت شروع شد.")
 
-    # ---------- moderator/settings ----------
     async def moderator_menu(self, callback: types.CallbackQuery):
         group_id = self.app.ui.group_chat_id
         if not group_id or not await self._is_admin(callback, group_id):
@@ -475,7 +461,9 @@ class FeatureParity:
             return
         uid = int(callback.data.rsplit(":", 1)[1])
         game = self._game(group_id)
-        self.app.runtime.state.games.update_game(game["id"], moderator_id=uid)
+        if game:
+            self.app.runtime.state.games.update_game(game["id"], moderator_id=uid)
+            game["moderator_id"] = uid
         await callback.message.edit_text(f"✅ گرداننده جدید: <b>{html.escape(self.app._name(uid))}</b>", parse_mode="HTML", reply_markup=self.panel_keyboard(group_id))
         await callback.answer()
 
@@ -498,12 +486,13 @@ class FeatureParity:
         game = self._game(group_id)
         if game:
             self.app.runtime.state.games.update_game(game["id"], status="finished", state={})
+            game["status"] = "finished"
+            game["state"] = {}
         if self.app.ui.turn_timer_task and not self.app.ui.turn_timer_task.done():
             self.app.ui.turn_timer_task.cancel()
         await callback.message.edit_text("🚫 بازی لغو شد.")
         await callback.answer("بازی لغو شد.")
 
-    # ---------- scenario CRUD ----------
     async def scenario_menu(self, callback: types.CallbackQuery):
         if not await self._is_admin(callback, self.app.ui.group_chat_id or 0):
             await callback.answer("⛔ فقط مدیران گروه.", show_alert=True)
@@ -578,7 +567,6 @@ class FeatureParity:
         await callback.message.edit_text(f"✅ سناریو «{html.escape(name)}» حذف شد.", reply_markup=self.panel_keyboard(self.app.ui.group_chat_id or 0))
         await callback.answer()
 
-    # ---------- dispatcher registration ----------
     def register(self):
         dp = self.app.dp
         dp.register_callback_query_handler(self.open_panel, lambda c: c.data == "fp:panel")

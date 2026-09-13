@@ -18,17 +18,72 @@ async def _safe_answer(callback: Any, text: str, show_alert: bool = False) -> No
         pass
 
 
-def _runtime(legacy: Any) -> PersistentChallengeRuntime:
-    runtime = getattr(legacy, "_persistent_challenge_runtime", None)
-    if runtime is None:
-        runtime = PersistentChallengeRuntime()
-        legacy._persistent_challenge_runtime = runtime
-    return runtime
+async def _close_challenge_buttons(callback: Any) -> None:
+    """Close the accept/reject controls immediately after a response."""
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
 
-def _group_id(legacy: Any) -> int | None:
+async def _hydrate_player_names(legacy: Any, *user_ids: int) -> None:
+    """Fill legacy.players from Telegram when runtime state lacks a real name.
+
+    Older game state can contain the literal fallback values ``بازیکن`` or
+    ``❓``. Those values are not considered valid names and must be hydrated as
+    well. The challenger is also hydrated from CallbackQuery.from_user when
+    possible, avoiding an unnecessary API call for that side of the message.
+    """
+    players = getattr(legacy, "players", None)
+    if not isinstance(players, dict):
+        return
+    bot = getattr(legacy, "bot", None)
+    group_id = getattr(legacy, "group_chat_id", None)
+
+    callback_user = None
+    # The active callback is not passed here, so Telegram lookup remains the
+    # authoritative fallback for both participants.
+    invalid = {None, "", "بازیکن", "❓", "?"}
+
+    for raw_id in user_ids:
+        try:
+            user_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+
+        try:
+            current = players.get(user_id)
+        except Exception:
+            current = None
+        if current not in invalid:
+            continue
+
+        if bot is None or not group_id:
+            continue
+        try:
+            member = await bot.get_chat_member(int(group_id), user_id)
+            user = getattr(member, "user", None)
+            name = getattr(user, "full_name", None) or getattr(user, "first_name", None)
+            if name:
+                players[user_id] = name
+        except Exception:
+            continue
+
+
+def _group_id(legacy: Any, callback: Any = None) -> int | None:
     value = getattr(legacy, "group_chat_id", None)
-    return int(value) if value else None
+    if value:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            pass
+    try:
+        chat = getattr(getattr(callback, "message", None), "chat", None)
+        if chat and getattr(chat, "id", None):
+            return int(chat.id)
+    except Exception:
+        pass
+    return None
 
 
 def _find_challenge(runtime: PersistentChallengeRuntime, group_id: int, challenger_id: int, target_id: int, status: str | None = None):
@@ -43,7 +98,7 @@ def _find_challenge(runtime: PersistentChallengeRuntime, group_id: int, challeng
 
 
 async def bridged_challenge_request(legacy: Any, callback: Any, original: Any):
-    group_id = _group_id(legacy)
+    group_id = _group_id(legacy, callback)
     if not group_id:
         return await original(callback)
     try:
@@ -53,6 +108,10 @@ async def bridged_challenge_request(legacy: Any, callback: Any, original: Any):
         challenger_id = int(callback.from_user.id)
         if not target_id or challenger_id == int(target_id):
             return await original(callback)
+
+        legacy.group_chat_id = group_id
+        await _hydrate_player_names(legacy, challenger_id, int(target_id))
+
         runtime = _runtime(legacy)
         existing = _find_challenge(runtime, group_id, challenger_id, int(target_id), "pending")
         if not existing:
@@ -65,7 +124,7 @@ async def bridged_challenge_request(legacy: Any, callback: Any, original: Any):
 
 
 async def bridged_challenge_response(legacy: Any, callback: Any, original: Any):
-    group_id = _group_id(legacy)
+    group_id = _group_id(legacy, callback)
     if not group_id:
         return await original(callback)
     try:
@@ -74,8 +133,14 @@ async def bridged_challenge_response(legacy: Any, callback: Any, original: Any):
         timing = parts[1] if action == "accept" else None
         challenger_id = int(parts[2])
         target_id = int(parts[3])
+
+        legacy.group_chat_id = group_id
+        await _hydrate_player_names(legacy, challenger_id, target_id)
+
         runtime = _runtime(legacy)
         row = _find_challenge(runtime, group_id, challenger_id, target_id, "pending")
+
+        await _close_challenge_buttons(callback)
 
         if action == "accept" and row:
             pause_state = {
@@ -100,6 +165,14 @@ async def bridged_challenge_response(legacy: Any, callback: Any, original: Any):
         await _safe_answer(callback, "⚠️ ثبت وضعیت چالش انجام نشد.", True)
         return
     return await original(callback)
+
+
+def _runtime(legacy: Any) -> PersistentChallengeRuntime:
+    runtime = getattr(legacy, "_persistent_challenge_runtime", None)
+    if runtime is None:
+        runtime = PersistentChallengeRuntime()
+        legacy._persistent_challenge_runtime = runtime
+    return runtime
 
 
 def install_legacy_challenge_cutover(legacy: Any) -> dict[str, bool]:
@@ -138,7 +211,5 @@ def install_legacy_challenge_cutover(legacy: Any) -> dict[str, bool]:
 
     result["request"] = replace("challenge_request", bridged_challenge_request)
     result["response"] = replace("handle_challenge_response", bridged_challenge_response)
-    # The legacy choice callback has historically existed in multiple forms.
-    # It remains UI-only; accepted/rejected state is persisted by the response bridge.
     result["choice"] = bool(getattr(legacy, "challenge_choice", None))
     return result
