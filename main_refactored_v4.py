@@ -1,4 +1,3 @@
-```python
 """MafiaNights clean migration target, feature-parity v4."""
 
 from __future__ import annotations
