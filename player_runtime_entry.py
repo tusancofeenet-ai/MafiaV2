@@ -641,3 +641,12 @@ async def on_startup(dp):
     logging.info("ASSISTANT ADMIN PANEL + CALLBACK ROUTER ACTIVE in player_runtime_entry")
 
 main.on_startup = on_startup
+
+if __name__ == "__main__":
+    from aiogram import executor
+
+    executor.start_polling(
+        main.dp,
+        skip_updates=True,
+        on_startup=main.on_startup,
+    )
