@@ -23,9 +23,25 @@ def install(main):
         logging.error("Seat emoji patch: callback registry unavailable")
         return
 
-    item = _find(registry, "seat_menu")
+        item = _find(registry, "seat_menu")
     if item is None:
-        logging.warning("Seat emoji patch: seat_menu handler not found")
+        # The canonical lobby now owns seat rendering/selection.
+        # The legacy seat_menu handler is intentionally absent.
+        for candidate in registry:
+            callback = _handler(candidate)
+            if (
+                getattr(callback, "__name__", "") == "seat"
+                and getattr(callback, "__module__", "") == "runtime.lobby_seat_authority"
+            ):
+                main._seat_emoji_patch = True
+                logging.info(
+                    "Seat emoji patch: canonical lobby seat handler already active"
+                )
+                return
+
+        logging.info(
+            "Seat emoji patch: no legacy seat_menu handler; nothing to patch"
+        )
         return
 
     original = _handler(item)
