@@ -1499,8 +1499,30 @@ main.on_startup = on_startup
 if __name__ == "__main__":
     from aiogram import executor
 
-    executor.start_polling(
-        main.dp,
-        skip_updates=True,
-        on_startup=main.on_startup,
-    )
+    logging.info("POLLING TRACE 1: entering executor.start_polling")
+
+    async def _traced_startup(dp):
+        logging.info("POLLING TRACE 2: traced on_startup entered")
+        try:
+            await main.on_startup(dp)
+            logging.info("POLLING TRACE 3: traced on_startup returned")
+        except Exception:
+            logging.exception("POLLING TRACE ERROR: main.on_startup failed")
+            raise
+
+    try:
+        logging.info("POLLING TRACE 4: calling executor.start_polling")
+
+        executor.start_polling(
+            main.dp,
+            skip_updates=True,
+            on_startup=_traced_startup,
+        )
+
+        logging.info("POLLING TRACE 5: executor.start_polling returned")
+
+    except Exception:
+        logging.exception(
+            "POLLING TRACE ERROR: executor.start_polling failed"
+        )
+        raise
