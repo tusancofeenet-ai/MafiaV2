@@ -105,15 +105,42 @@ async def recover_and_hydrate(main_module: Any) -> list[dict[str, Any]]:
 
 
 async def startup(main_module: Any, original_startup: Any) -> list[dict[str, Any]]:
-    """Run persistent recovery without deleting a webhook in Vercel.
+    """Run persistent recovery with detailed startup diagnostics."""
 
-    The legacy main1 startup always calls delete_webhook(), which is correct
-    for long-polling but breaks a request-driven Vercel webhook: the first
-    webhook request deletes the webhook and all subsequent Telegram updates
-    stop arriving. Preserve the original startup for local polling only.
-    """
+    logging.info(
+        "STARTUP TRACE 1: production_bridge.startup entered "
+        "VERCEL=%s original_startup=%s",
+        bool(os.getenv("VERCEL")),
+        bool(original_startup),
+    )
+
     if original_startup is not None and not os.getenv("VERCEL"):
+        logging.info(
+            "STARTUP TRACE 2: calling main1.on_startup "
+            "(delete_webhook path)"
+        )
+
         await original_startup(main_module.dp)
+
+        logging.info(
+            "STARTUP TRACE 3: main1.on_startup returned"
+        )
+
     elif os.getenv("VERCEL"):
-        logging.info("Webhook runtime detected; skipped polling-only delete_webhook startup.")
-    return await recover_and_hydrate(main_module)
+        logging.info(
+            "STARTUP TRACE 2: Vercel detected; "
+            "skipped polling-only startup"
+        )
+
+    logging.info(
+        "STARTUP TRACE 4: entering recover_and_hydrate"
+    )
+
+    results = await recover_and_hydrate(main_module)
+
+    logging.info(
+        "STARTUP TRACE 12: recover_and_hydrate returned results=%s",
+        results,
+    )
+
+    return results
