@@ -12,5 +12,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libffi-dev 
 
 COPY . .
 
-# Canonical clean production entrypoint. The legacy main1.py is not imported.
-CMD ["python", "main.py"]
+# Canonical production entrypoint.
+CMD ["python", "-u", "player_runtime_entry.py"]
