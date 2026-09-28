@@ -1,16 +1,23 @@
-# Stable runtime for aiogram 2.x + aiohttp 3.8.x.
-FROM python:3.11-slim
-
-WORKDIR /Mafia
-
-COPY requirements.txt .
-
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libffi-dev \
-    && pip install --upgrade pip \
-    && pip install -r requirements.txt \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY . .
-
-# Canonical production entrypoint.
-CMD ["python", "-u", "player_runtime_entry.py"]
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile",
+    "buildEnvironment": "V3"
+  },
+  "deploy": {
+    "runtime": "V2",
+    "numReplicas": 1,
+    "startCommand": "python -u player_runtime_entry.py",
+    "sleepApplication": false,
+    "useLegacyStacker": false,
+    "ipv6EgressEnabled": false,
+    "multiRegionConfig": {
+      "sfo": {
+        "numReplicas": 1
+      }
+    },
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}
