@@ -1,23 +1,9 @@
-{
-  "$schema": "https://railway.com/railway.schema.json",
-  "build": {
-    "builder": "DOCKERFILE",
-    "dockerfilePath": "Dockerfile",
-    "buildEnvironment": "V3"
-  },
-  "deploy": {
-    "runtime": "V2",
-    "numReplicas": 1,
-    "startCommand": "python -u player_runtime_entry.py",
-    "sleepApplication": false,
-    "useLegacyStacker": false,
-    "ipv6EgressEnabled": false,
-    "multiRegionConfig": {
-      "sfo": {
-        "numReplicas": 1
-      }
-    },
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
-  }
-}
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY . .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+CMD ["python", "-u", "player_runtime_entry.py"]
