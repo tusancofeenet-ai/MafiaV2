@@ -1087,11 +1087,24 @@ except Exception:
 _original_startup = main.on_startup
 
 
-async def on_startup(dp):
+async def _trace_startup_step(label, awaitable):
+    print(f"[STARTUP TRACE BEGIN] {label}", flush=True)
     try:
-        results = await persistent_startup(
-            main,
-            _original_startup,
+        result = await awaitable
+    except Exception:
+        logging.exception("[STARTUP TRACE FAILED] %s", label)
+        raise
+    print(f"[STARTUP TRACE DONE] {label}", flush=True)
+    return result
+
+
+async def on_startup(dp):
+    print("[STARTUP TRACE ENTER] on_startup", flush=True)
+
+    try:
+        results = await _trace_startup_step(
+            "persistent_startup",
+            persistent_startup(main, _original_startup),
         )
 
         logging.info(
@@ -1115,8 +1128,9 @@ async def on_startup(dp):
         if configured_gid:
             main.group_chat_id = int(configured_gid)
 
-            admins = await main.bot.get_chat_administrators(
-                main.group_chat_id
+            admins = await _trace_startup_step(
+                "get_chat_administrators",
+                main.bot.get_chat_administrators(main.group_chat_id),
             )
 
             main.admins = {
@@ -1135,57 +1149,73 @@ async def on_startup(dp):
         install as install_final_private_ui,
     )
 
-    await install_final_private_ui(main)
-
+    await _trace_startup_step(
+        "install_final_private_ui",
+        install_final_private_ui(main),
+    )
 
     from runtime.private_pv_authority_v2 import (
         install as install_canonical_private_pv,
     )
 
-    await install_canonical_private_pv(main)
-
+    await _trace_startup_step(
+        "install_canonical_private_pv",
+        install_canonical_private_pv(main),
+    )
 
     from runtime.pv_route_priority_v2 import (
         install as install_pv_route_priority,
     )
 
-    await install_pv_route_priority(main)
-
+    await _trace_startup_step(
+        "install_pv_route_priority",
+        install_pv_route_priority(main),
+    )
 
     from runtime.private_ui_recovery_v3 import (
         install as install_private_ui_recovery_v3,
     )
 
-    await install_private_ui_recovery_v3(main)
-
+    await _trace_startup_step(
+        "install_private_ui_recovery_v3",
+        install_private_ui_recovery_v3(main),
+    )
 
     from runtime.private_ui_recovery_v5 import (
         install as install_private_ui_recovery_v5,
     )
 
-    await install_private_ui_recovery_v5(main)
-
+    await _trace_startup_step(
+        "install_private_ui_recovery_v5",
+        install_private_ui_recovery_v5(main),
+    )
 
     from runtime.private_ui_recovery_v6 import (
         install as install_private_ui_recovery_v6,
     )
 
-    await install_private_ui_recovery_v6(main)
-
+    await _trace_startup_step(
+        "install_private_ui_recovery_v6",
+        install_private_ui_recovery_v6(main),
+    )
 
     from runtime.private_ui_recovery_v7 import (
         install as install_private_ui_recovery_v7,
     )
 
-    await install_private_ui_recovery_v7(main)
-
+    await _trace_startup_step(
+        "install_private_ui_recovery_v7",
+        install_private_ui_recovery_v7(main),
+    )
 
     from runtime.private_ui_recovery_v8 import (
         install as install_private_ui_recovery_v8,
     )
 
-    await install_private_ui_recovery_v8(main)
-
+    await _trace_startup_step(
+        "install_private_ui_recovery_v8",
+        install_private_ui_recovery_v8(main),
+    )
 
     # Private UI recovery layers register their own /start routes.
     # Re-arm the single production owner after those installers so neither
@@ -1198,7 +1228,6 @@ async def on_startup(dp):
 
     _rearm_single_owner_legacy_game_handlers()
 
-
     try:
         register_menu = getattr(
             main,
@@ -1207,13 +1236,15 @@ async def on_startup(dp):
         )
 
         if register_menu is not None:
-            await register_menu()
+            await _trace_startup_step(
+                "register_telegram_commands",
+                register_menu(),
+            )
 
     except Exception:
         logging.exception(
             "Failed to register Telegram command menu"
         )
-
 
     # Re-apply progress UI after final private-UI authorities
     # replace the start keyboard.
@@ -1238,11 +1269,12 @@ async def on_startup(dp):
             "Failed to re-apply progress UI after private UI authorities"
         )
 
-
     from runtime.faceoff import install as install_faceoff
 
-    await install_faceoff(main)
-
+    await _trace_startup_step(
+        "install_faceoff",
+        install_faceoff(main),
+    )
 
     # Final assistant callback authority.
     # Private UI recovery layers above may promote generic callback handlers,
@@ -1253,7 +1285,6 @@ async def on_startup(dp):
     )
 
     install_assistant_callback_router(main)
-
 
     # Final message-handler authority: several compatibility installers are
     # registered after AssistantAdminPanel. Re-prioritize its FSM handlers now,
@@ -1313,7 +1344,6 @@ async def on_startup(dp):
         logging.exception(
             "assistant admin: final FSM message prioritization failed"
         )
-
 
     # Final assistant message authority.
     # Startup-time UI recovery and command installers above can register
@@ -1409,7 +1439,6 @@ async def on_startup(dp):
             "assistant admin: final message authority rearm failed"
         )
 
-
     # Absolute last startup authority:
     # private-UI recovery layers above can register generic text handlers
     # after the module-level rearm. Re-arm the canonical commands.py
@@ -1486,11 +1515,12 @@ async def on_startup(dp):
             "Failed final startup rearm of canonical text commands"
         )
 
-
     logging.info(
         "ASSISTANT ADMIN PANEL + CALLBACK ROUTER ACTIVE "
         "in player_runtime_entry"
     )
+
+    print("[STARTUP TRACE COMPLETE] on_startup", flush=True)
 
 
 main.on_startup = on_startup
@@ -1511,7 +1541,14 @@ if __name__ == "__main__":
             raise
 
     try:
-        logging.info("POLLING TRACE 4: calling executor.start_polling")
+        print(
+            "[POLLING TRACE] Calling executor.start_polling",
+            flush=True,
+        )
+
+        logging.info(
+            "POLLING TRACE 4: calling executor.start_polling"
+        )
 
         executor.start_polling(
             main.dp,
@@ -1519,7 +1556,14 @@ if __name__ == "__main__":
             on_startup=_traced_startup,
         )
 
-        logging.info("POLLING TRACE 5: executor.start_polling returned")
+        logging.info(
+            "POLLING TRACE 5: executor.start_polling returned"
+        )
+
+        print(
+            "[POLLING TRACE] executor.start_polling returned",
+            flush=True,
+        )
 
     except Exception:
         logging.exception(
