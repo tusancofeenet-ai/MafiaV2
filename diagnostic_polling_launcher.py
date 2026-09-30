@@ -8,10 +8,6 @@ from aiogram import Bot
 from aiogram.dispatcher import Dispatcher
 
 
-# ============================================================
-# LOGGING
-# ============================================================
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -28,7 +24,7 @@ logger.info("=" * 70)
 
 
 # ============================================================
-# TRACE Bot.get_updates
+# BOT.get_updates
 # ============================================================
 
 _original_get_updates = Bot.get_updates
@@ -36,7 +32,6 @@ _original_get_updates = Bot.get_updates
 
 @wraps(_original_get_updates)
 async def _diagnostic_get_updates(self, *args, **kwargs):
-
     logger.info(
         "[GET_UPDATES] calling Telegram getUpdates args=%r kwargs=%r",
         args,
@@ -75,7 +70,7 @@ logger.info("[DIAGNOSTIC] Bot.get_updates patched")
 
 
 # ============================================================
-# TRACE Dispatcher.process_update
+# Dispatcher.process_update
 # ============================================================
 
 _original_process_update = Dispatcher.process_update
@@ -88,8 +83,11 @@ async def _diagnostic_process_update(
     *args,
     **kwargs,
 ):
-
-    update_id = getattr(update, "update_id", "?")
+    update_id = getattr(
+        update,
+        "update_id",
+        "?",
+    )
 
     logger.info(
         "[INCOMING UPDATE] update_id=%s type=%s",
@@ -98,13 +96,11 @@ async def _diagnostic_process_update(
     )
 
     # --------------------------------------------------------
-    # MESSAGE DIAGNOSTIC
+    # Inspect incoming update
     # --------------------------------------------------------
 
     try:
-
         if getattr(update, "message", None):
-
             message = update.message
 
             logger.info(
@@ -113,10 +109,6 @@ async def _diagnostic_process_update(
                 getattr(message.from_user, "id", None),
                 getattr(message, "text", None),
             )
-
-            # ==================================================
-            # HANDLER DIAGNOSTIC
-            # ==================================================
 
             handlers_container = getattr(
                 self,
@@ -145,87 +137,134 @@ async def _diagnostic_process_update(
                     len(handlers),
                 )
 
+                # ------------------------------------------------
+                # Dump every registered message handler
+                # ------------------------------------------------
+
                 for index, handler in enumerate(handlers):
 
                     try:
 
-callback = getattr(handler, "handler", None)
+                        # aiogram 2.x normally stores callback
+                        # in HandlerObj.handler.
+                        callback = getattr(
+                            handler,
+                            "handler",
+                            None,
+                        )
 
-if callback is None:
-    callback = getattr(handler, "callback", None)
-
-callback_name = getattr(
-    callback,
-    "__qualname__",
-    repr(callback),
-)
-
-callback_module = getattr(
-    callback,
-    "__module__",
-    "?",
-)
-
-filters = getattr(handler, "filters", None)
-
-filter_details = []
-
-if filters:
-    for filter_obj in filters:
-        try:
-            filter_instance = getattr(
-                filter_obj,
-                "filter",
-                None,
-            )
-
-            filter_name = type(
-                filter_instance
-            ).__name__ if filter_instance else "?"
-
-            filter_info = {
-                "type": filter_name,
-            }
-
-            # aiogram Command filter
-            if filter_instance is not None:
-                for attr in (
-                    "commands",
-                    "prefixes",
-                    "ignore_case",
-                    "ignore_caption",
-                    "regexp",
-                    "commands_prefix",
-                ):
-                    if hasattr(filter_instance, attr):
-                        try:
-                            value = getattr(
-                                filter_instance,
-                                attr,
+                        # Compatibility fallback.
+                        if callback is None:
+                            callback = getattr(
+                                handler,
+                                "callback",
+                                None,
                             )
-                            filter_info[attr] = repr(value)
-                        except Exception:
-                            pass
 
-            filter_details.append(filter_info)
+                        callback_name = getattr(
+                            callback,
+                            "__qualname__",
+                            repr(callback),
+                        )
 
-        except Exception as exc:
-            filter_details.append(
-                {
-                    "error": repr(exc),
-                }
-            )
+                        callback_module = getattr(
+                            callback,
+                            "__module__",
+                            "?",
+                        )
 
-logger.info(
-    "[HANDLER %03d] "
-    "handler=%s "
-    "module=%s "
-    "filters=%s",
-    index,
-    callback_name,
-    callback_module,
-    filter_details,
-)
+                        filters = getattr(
+                            handler,
+                            "filters",
+                            None,
+                        )
+
+                        filter_details = []
+
+                        if filters:
+
+                            for filter_obj in filters:
+
+                                try:
+
+                                    filter_instance = getattr(
+                                        filter_obj,
+                                        "filter",
+                                        None,
+                                    )
+
+                                    if filter_instance is None:
+
+                                        filter_details.append(
+                                            {
+                                                "type": "?",
+                                            }
+                                        )
+
+                                        continue
+
+                                    filter_name = type(
+                                        filter_instance
+                                    ).__name__
+
+                                    filter_info = {
+                                        "type": filter_name,
+                                    }
+
+                                    # --------------------------------
+                                    # Dump useful filter attributes
+                                    # --------------------------------
+
+                                    for attr in (
+                                        "commands",
+                                        "prefixes",
+                                        "ignore_case",
+                                        "ignore_caption",
+                                        "regexp",
+                                        "commands_prefix",
+                                    ):
+
+                                        if hasattr(
+                                            filter_instance,
+                                            attr,
+                                        ):
+
+                                            try:
+
+                                                value = getattr(
+                                                    filter_instance,
+                                                    attr,
+                                                )
+
+                                                filter_info[attr] = repr(
+                                                    value
+                                                )
+
+                                            except Exception:
+                                                pass
+
+                                    filter_details.append(
+                                        filter_info
+                                    )
+
+                                except Exception as exc:
+
+                                    filter_details.append(
+                                        {
+                                            "error": repr(exc),
+                                        }
+                                    )
+
+                        logger.info(
+                            "[HANDLER %03d] "
+                            "handler=%s "
+                            "module=%s "
+                            "filters=%s",
+                            index,
+                            callback_name,
+                            callback_module,
+                            filter_details,
+                        )
 
                     except Exception:
 
@@ -234,11 +273,11 @@ logger.info(
                             index,
                         )
 
-        # ----------------------------------------------------
-        # CALLBACK QUERY
-        # ----------------------------------------------------
-
-        elif getattr(update, "callback_query", None):
+        elif getattr(
+            update,
+            "callback_query",
+            None,
+        ):
 
             callback = update.callback_query
 
@@ -257,11 +296,11 @@ logger.info(
                 ),
             )
 
-        # ----------------------------------------------------
-        # INLINE QUERY
-        # ----------------------------------------------------
-
-        elif getattr(update, "inline_query", None):
+        elif getattr(
+            update,
+            "inline_query",
+            None,
+        ):
 
             inline = update.inline_query
 
@@ -280,10 +319,6 @@ logger.info(
                 ),
             )
 
-        # ----------------------------------------------------
-        # OTHER UPDATE
-        # ----------------------------------------------------
-
         else:
 
             detected = []
@@ -298,7 +333,12 @@ logger.info(
                 "poll_answer",
             ):
 
-                if getattr(update, name, None) is not None:
+                if getattr(
+                    update,
+                    name,
+                    None,
+                ) is not None:
+
                     detected.append(name)
 
             logger.info(
@@ -312,9 +352,9 @@ logger.info(
             "[UPDATE INSPECT] failed"
         )
 
-    # ========================================================
-    # REAL DISPATCHER
-    # ========================================================
+    # --------------------------------------------------------
+    # Let aiogram actually process the update
+    # --------------------------------------------------------
 
     try:
 
@@ -353,7 +393,7 @@ logger.info(
 
 
 # ============================================================
-# TRACE Dispatcher.start_polling
+# Dispatcher.start_polling
 # ============================================================
 
 _original_start_polling = Dispatcher.start_polling
@@ -407,7 +447,7 @@ logger.info(
 
 
 # ============================================================
-# TRACE Bot.__init__
+# Bot.__init__
 # ============================================================
 
 _original_bot_init = Bot.__init__
@@ -464,7 +504,7 @@ logger.info(
 
 
 # ============================================================
-# START REAL RUNTIME
+# Start production runtime
 # ============================================================
 
 logger.info("=" * 70)
