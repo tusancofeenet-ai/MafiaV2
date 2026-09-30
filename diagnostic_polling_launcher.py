@@ -149,40 +149,83 @@ async def _diagnostic_process_update(
 
                     try:
 
-                        callback = getattr(
-                            handler,
-                            "callback",
-                            None,
-                        )
+callback = getattr(handler, "handler", None)
 
-                        callback_name = getattr(
-                            callback,
-                            "__qualname__",
-                            repr(callback),
-                        )
+if callback is None:
+    callback = getattr(handler, "callback", None)
 
-                        callback_module = getattr(
-                            callback,
-                            "__module__",
-                            "?",
-                        )
+callback_name = getattr(
+    callback,
+    "__qualname__",
+    repr(callback),
+)
 
-                        filters = getattr(
-                            handler,
-                            "filters",
-                            None,
-                        )
+callback_module = getattr(
+    callback,
+    "__module__",
+    "?",
+)
 
-                        logger.info(
-                            "[HANDLER %03d] "
-                            "callback=%s "
-                            "module=%s "
-                            "filters=%r",
-                            index,
-                            callback_name,
-                            callback_module,
-                            filters,
-                        )
+filters = getattr(handler, "filters", None)
+
+filter_details = []
+
+if filters:
+    for filter_obj in filters:
+        try:
+            filter_instance = getattr(
+                filter_obj,
+                "filter",
+                None,
+            )
+
+            filter_name = type(
+                filter_instance
+            ).__name__ if filter_instance else "?"
+
+            filter_info = {
+                "type": filter_name,
+            }
+
+            # aiogram Command filter
+            if filter_instance is not None:
+                for attr in (
+                    "commands",
+                    "prefixes",
+                    "ignore_case",
+                    "ignore_caption",
+                    "regexp",
+                    "commands_prefix",
+                ):
+                    if hasattr(filter_instance, attr):
+                        try:
+                            value = getattr(
+                                filter_instance,
+                                attr,
+                            )
+                            filter_info[attr] = repr(value)
+                        except Exception:
+                            pass
+
+            filter_details.append(filter_info)
+
+        except Exception as exc:
+            filter_details.append(
+                {
+                    "error": repr(exc),
+                }
+            )
+
+logger.info(
+    "[HANDLER %03d] "
+    "handler=%s "
+    "module=%s "
+    "filters=%s",
+    index,
+    callback_name,
+    callback_module,
+    filter_details,
+)
 
                     except Exception:
 
