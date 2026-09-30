@@ -372,6 +372,184 @@ def _dump_message_handlers(dispatcher):
 
 
 # ============================================================
+# REAL _production_start EXECUTION TRACE
+# ============================================================
+
+def _instrument_production_start_handlers(dispatcher):
+
+    """
+    Wrap the real _production_start callbacks so we can distinguish:
+
+      1. handler exists
+      2. handler is actually invoked by aiogram
+      3. handler completes
+      4. handler raises an exception
+
+    This does NOT manually execute the handler.
+    It only wraps the callback used by aiogram's real dispatcher.
+    """
+
+    try:
+
+        handlers_container = getattr(
+            dispatcher,
+            "message_handlers",
+            None,
+        )
+
+        handlers = getattr(
+            handlers_container,
+            "handlers",
+            None,
+        )
+
+        if not handlers:
+            logger.warning(
+                "[START EXEC] no message handlers available for instrumentation"
+            )
+            return
+
+        for index, item in enumerate(handlers):
+
+            try:
+
+                callback = getattr(
+                    item,
+                    "handler",
+                    None,
+                )
+
+                if callback is None:
+                    callback = getattr(
+                        item,
+                        "callback",
+                        None,
+                    )
+
+                callback_name = getattr(
+                    callback,
+                    "__name__",
+                    "",
+                )
+
+                callback_qualname = getattr(
+                    callback,
+                    "__qualname__",
+                    "",
+                )
+
+                if (
+                    callback_name != "_production_start"
+                    and callback_qualname != "_production_start"
+                ):
+                    continue
+
+                if getattr(
+                    callback,
+                    "_diagnostic_start_wrapped",
+                    False,
+                ):
+                    logger.info(
+                        "[START EXEC] handler=%03d already instrumented",
+                        index,
+                    )
+                    continue
+
+                original_callback = callback
+
+                @wraps(original_callback)
+                async def traced_start(
+                    message,
+                    *args,
+                    __callback=original_callback,
+                    __index=index,
+                    **kwargs,
+                ):
+
+                    logger.info(
+                        "[START EXEC] ENTER "
+                        "handler=%03d "
+                        "chat_id=%r "
+                        "user_id=%r "
+                        "chat_type=%r "
+                        "text=%r",
+                        __index,
+                        getattr(
+                            getattr(message, "chat", None),
+                            "id",
+                            None,
+                        ),
+                        getattr(
+                            getattr(message, "from_user", None),
+                            "id",
+                            None,
+                        ),
+                        getattr(
+                            getattr(message, "chat", None),
+                            "type",
+                            None,
+                        ),
+                        getattr(
+                            message,
+                            "text",
+                            None,
+                        ),
+                    )
+
+                    try:
+
+                        result = await __callback(
+                            message,
+                            *args,
+                            **kwargs,
+                        )
+
+                        logger.info(
+                            "[START EXEC] EXIT "
+                            "handler=%03d "
+                            "result=%r",
+                            __index,
+                            result,
+                        )
+
+                        return result
+
+                    except Exception:
+
+                        logger.exception(
+                            "[START EXEC] FAILED "
+                            "handler=%03d",
+                            __index,
+                        )
+
+                        raise
+
+                traced_start._diagnostic_start_wrapped = True
+
+                item.handler = traced_start
+
+                logger.info(
+                    "[START EXEC] instrumentation installed "
+                    "handler=%03d callback=%s",
+                    index,
+                    callback_qualname or callback_name,
+                )
+
+            except Exception:
+
+                logger.exception(
+                    "[START EXEC] failed instrumenting handler=%03d",
+                    index,
+                )
+
+    except Exception:
+
+        logger.exception(
+            "[START EXEC] instrumentation setup FAILED"
+        )
+
+
+# ============================================================
 # FILTER MATCH DIAGNOSTIC
 # ============================================================
 
@@ -505,6 +683,38 @@ async def _trace_start_filters(
                                 "handler=%03d "
                                 "filter=%d "
                                 "NO_FILTER_INSTANCE",
+                                index,
+                                filter_index,
+                            )
+
+                            continue
+
+                        # ====================================================
+                        # IMPORTANT:
+                        # StateFilter depends on aiogram's real dispatcher
+                        # context (chat/user/state). Manually calling
+                        # StateFilter.check(message) here happens OUTSIDE
+                        # Dispatcher.process_update and therefore can produce:
+                        #
+                        #   ValueError:
+                        #   Both chat and user can't be None
+                        #
+                        # This is a diagnostic artifact, not a real handler
+                        # execution failure.
+                        #
+                        # The actual StateFilter result is observed through
+                        # the real process_update path below.
+                        # ====================================================
+
+                        if filter_name == "StateFilter":
+
+                            logger.info(
+                                "[FILTER TRACE] "
+                                "handler=%03d "
+                                "filter=%d "
+                                "StateFilter skipped in manual inspection; "
+                                "actual result will be observed during "
+                                "process_update",
                                 index,
                                 filter_index,
                             )
@@ -724,6 +934,22 @@ async def _diagnostic_process_update(
 
         logger.exception(
             "[UPDATE INSPECT] failed"
+        )
+
+    # ========================================================
+    # INSTALL REAL /start EXECUTION TRACE
+    # ========================================================
+
+    try:
+
+        _instrument_production_start_handlers(
+            self
+        )
+
+    except Exception:
+
+        logger.exception(
+            "[START EXEC] instrumentation failed"
         )
 
     # ========================================================
