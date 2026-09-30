@@ -1,44 +1,138 @@
+# diagnostic_polling_launcher.py
+#
+# Diagnostic launcher for MafiaV2
+#
+# Purpose:
+#   Trace the complete Telegram -> aiogram polling -> Dispatcher.process_update
+#   -> handler routing path, with special diagnostics for /start handlers.
+#
+# This file does NOT replace player_runtime_entry.py.
+# It only launches player_runtime_entry.py with diagnostic instrumentation.
+
 import logging
 import runpy
 import sys
 import traceback
 from functools import wraps
-_diagnostic_process_update
-from aiogram import Bot
-from aiogram.dispatcher import Dispatcher
 
+
+# ============================================================
+# LOGGING
+# ============================================================
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    stream=sys.stdout,
-    force=True,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
-logger = logging.getLogger("polling_diagnostics")
-
-
-logger.info("=" * 70)
-logger.info("[DIAGNOSTIC LAUNCHER] Starting player_runtime_entry.py")
-logger.info("=" * 70)
+logger = logging.getLogger("diagnostic_launcher")
 
 
 # ============================================================
-# BOT.get_updates
+# IMPORT AIROGRAM CLASSES
 # ============================================================
 
-_original_get_updates = Bot.get_updates
+try:
+    from aiogram import Bot
+    from aiogram import Dispatcher
 
-
-@wraps(_original_get_updates)
-async def _diagnostic_get_updates(self, *args, **kwargs):
     logger.info(
-        "[GET_UPDATES] calling Telegram getUpdates args=%r kwargs=%r",
-        args,
-        kwargs,
+        "[DIAG BOOT] aiogram imported successfully"
+    )
+
+except Exception:
+    logger.exception(
+        "[DIAG BOOT] failed to import aiogram"
+    )
+    raise
+
+
+# ============================================================
+# SAVE ORIGINAL METHODS
+# ============================================================
+
+_original_bot_init = Bot.__init__
+_original_get_updates = Bot.get_updates
+_original_process_update = Dispatcher.process_update
+_original_start_polling = Dispatcher.start_polling
+
+
+# ============================================================
+# BOT INIT TRACE
+# ============================================================
+
+@wraps(_original_bot_init)
+def _diagnostic_bot_init(self, *args, **kwargs):
+
+    logger.info(
+        "[BOT INIT] Bot.__init__ called"
     )
 
     try:
+
+        token = None
+
+        if args:
+            token = args[0]
+
+        if token is None:
+            token = kwargs.get("token")
+
+        if token:
+            try:
+                token_preview = str(token)[:12] + "..."
+            except Exception:
+                token_preview = "<unavailable>"
+        else:
+            token_preview = "<missing>"
+
+        logger.info(
+            "[BOT INIT] token=%s",
+            token_preview,
+        )
+
+    except Exception:
+        logger.exception(
+            "[BOT INIT] failed to inspect token"
+        )
+
+    result = _original_bot_init(
+        self,
+        *args,
+        **kwargs,
+    )
+
+    logger.info(
+        "[BOT INIT] Bot.__init__ completed"
+    )
+
+    return result
+
+
+Bot.__init__ = _diagnostic_bot_init
+
+
+# ============================================================
+# TELEGRAM getUpdates TRACE
+# ============================================================
+
+@wraps(_original_get_updates)
+async def _diagnostic_get_updates(
+    self,
+    *args,
+    **kwargs,
+):
+
+    logger.info(
+        "[GET_UPDATES] calling Telegram getUpdates "
+        "offset=%r timeout=%r allowed_updates=%r",
+        kwargs.get("offset"),
+        kwargs.get("timeout"),
+        kwargs.get("allowed_updates"),
+    )
+
+    try:
+
         result = await _original_get_updates(
             self,
             *args,
@@ -46,457 +140,440 @@ async def _diagnostic_get_updates(self, *args, **kwargs):
         )
 
         logger.info(
-            "[GET_UPDATES] returned count=%d",
-            len(result) if result else 0,
+            "[GET_UPDATES] Telegram returned %d update(s)",
+            len(result) if result is not None else 0,
         )
 
         if result:
+
             for update in result:
-                logger.info(
-                    "[GET_UPDATES] update_id=%s",
-                    getattr(update, "update_id", "?"),
-                )
+
+                try:
+
+                    update_id = getattr(
+                        update,
+                        "update_id",
+                        None,
+                    )
+
+                    message = getattr(
+                        update,
+                        "message",
+                        None,
+                    )
+
+                    text_value = getattr(
+                        message,
+                        "text",
+                        None,
+                    )
+
+                    chat = getattr(
+                        message,
+                        "chat",
+                        None,
+                    )
+
+                    chat_id = getattr(
+                        chat,
+                        "id",
+                        None,
+                    )
+
+                    user = getattr(
+                        message,
+                        "from_user",
+                        None,
+                    )
+
+                    user_id = getattr(
+                        user,
+                        "id",
+                        None,
+                    )
+
+                    logger.info(
+                        "[GET_UPDATES] "
+                        "update_id=%r "
+                        "chat_id=%r "
+                        "user_id=%r "
+                        "text=%r",
+                        update_id,
+                        chat_id,
+                        user_id,
+                        text_value,
+                    )
+
+                except Exception:
+                    logger.exception(
+                        "[GET_UPDATES] "
+                        "failed to inspect update"
+                    )
 
         return result
 
     except Exception:
-        logger.exception("[GET_UPDATES] ERROR")
+
+        logger.exception(
+            "[GET_UPDATES] Telegram getUpdates FAILED"
+        )
+
         raise
 
 
 Bot.get_updates = _diagnostic_get_updates
 
-logger.info("[DIAGNOSTIC] Bot.get_updates patched")
-
 
 # ============================================================
-# Dispatcher.process_update
+# HANDLER DUMP
 # ============================================================
 
-_original_process_update = Dispatcher.process_update
-
-
-@wraps(_original_process_update)
-async def _diagnostic_process_update(
-    self,
-    update,
-    *args,
-    **kwargs,
-):
-    update_id = getattr(
-        update,
-        "update_id",
-        "?",
-    )
+def _dump_message_handlers(dispatcher):
 
     logger.info(
-        "[INCOMING UPDATE] update_id=%s type=%s",
-        update_id,
-        type(update).__name__,
+        "[HANDLERS] inspecting Dispatcher.message_handlers"
     )
 
-    # --------------------------------------------------------
-    # Inspect incoming update
-    # --------------------------------------------------------
-
     try:
-        if getattr(update, "message", None):
-            message = update.message
 
-            logger.info(
-                "[UPDATE MESSAGE] chat_id=%s user_id=%s text=%r",
-                getattr(message.chat, "id", None),
-                getattr(message.from_user, "id", None),
-                getattr(message, "text", None),
+        handlers_container = getattr(
+            dispatcher,
+            "message_handlers",
+            None,
+        )
+
+        if handlers_container is None:
+
+            logger.warning(
+                "[HANDLERS] message_handlers is None"
             )
 
-            handlers_container = getattr(
-                self,
-                "message_handlers",
-                None,
+            return
+
+        handlers = getattr(
+            handlers_container,
+            "handlers",
+            None,
+        )
+
+        if handlers is None:
+
+            logger.warning(
+                "[HANDLERS] message_handlers.handlers is None"
             )
 
-            handlers = getattr(
-                handlers_container,
-                "handlers",
-                None,
-            )
+            return
 
-            if handlers is None:
+        logger.info(
+            "[HANDLERS] total message handlers=%d",
+            len(handlers),
+        )
 
-                logger.warning(
-                    "[HANDLER DIAGNOSTIC] "
-                    "message_handlers.handlers NOT FOUND"
+        for index, handler in enumerate(handlers):
+
+            try:
+
+                callback = getattr(
+                    handler,
+                    "handler",
+                    None,
                 )
 
-            else:
+                if callback is None:
+                    callback = getattr(
+                        handler,
+                        "callback",
+                        None,
+                    )
 
-                logger.info(
-                    "[HANDLER DIAGNOSTIC] "
-                    "message handler count=%d",
-                    len(handlers),
+                callback_name = getattr(
+                    callback,
+                    "__qualname__",
+                    repr(callback),
                 )
 
-                # ------------------------------------------------
-                # Dump every registered message handler
-                # ------------------------------------------------
+                callback_module = getattr(
+                    callback,
+                    "__module__",
+                    None,
+                )
 
-                for index, handler in enumerate(handlers):
+                filters = getattr(
+                    handler,
+                    "filters",
+                    None,
+                )
 
-                    try:
+                filter_dump = []
 
-                        # aiogram 2.x normally stores callback
-                        # in HandlerObj.handler.
-                        callback = getattr(
-                            handler,
-                            "handler",
-                            None,
-                        )
+                if filters:
 
-                        # Compatibility fallback.
-                        if callback is None:
-                            callback = getattr(
-                                handler,
-                                "callback",
+                    for filter_obj in filters:
+
+                        try:
+
+                            filter_instance = getattr(
+                                filter_obj,
+                                "filter",
                                 None,
                             )
 
-                        callback_name = getattr(
-                            callback,
-                            "__qualname__",
-                            repr(callback),
-                        )
+                            filter_name = (
+                                type(filter_instance).__name__
+                                if filter_instance is not None
+                                else type(filter_obj).__name__
+                            )
 
-                        callback_module = getattr(
-                            callback,
-                            "__module__",
-                            "?",
-                        )
+                            kwargs = getattr(
+                                filter_obj,
+                                "kwargs",
+                                {},
+                            )
 
-                        filters = getattr(
-                            handler,
-                            "filters",
-                            None,
-                        )
+                            filter_dump.append(
+                                {
+                                    "type": filter_name,
+                                    "kwargs": kwargs,
+                                }
+                            )
 
-                        filter_details = []
+                        except Exception:
 
-                        if filters:
+                            filter_dump.append(
+                                {
+                                    "type": "FILTER_INSPECTION_ERROR"
+                                }
+                            )
 
-                            for filter_obj in filters:
+                logger.info(
+                    "[HANDLER %03d] "
+                    "handler=%s "
+                    "module=%s "
+                    "filters=%r",
+                    index,
+                    callback_name,
+                    callback_module,
+                    filter_dump,
+                )
 
-                                try:
+            except Exception:
 
-                                    filter_instance = getattr(
-                                        filter_obj,
-                                        "filter",
-                                        None,
-                                    )
-
-                                    if filter_instance is None:
-
-                                        filter_details.append(
-                                            {
-                                                "type": "?",
-                                            }
-                                        )
-
-                                        continue
-
-                                    filter_name = type(
-                                        filter_instance
-                                    ).__name__
-
-                                    filter_info = {
-                                        "type": filter_name,
-                                    }
-
-                                    # --------------------------------
-                                    # Dump useful filter attributes
-                                    # --------------------------------
-
-                                    for attr in (
-                                        "commands",
-                                        "prefixes",
-                                        "ignore_case",
-                                        "ignore_caption",
-                                        "regexp",
-                                        "commands_prefix",
-                                    ):
-
-                                        if hasattr(
-                                            filter_instance,
-                                            attr,
-                                        ):
-
-                                            try:
-
-                                                value = getattr(
-                                                    filter_instance,
-                                                    attr,
-                                                )
-
-                                                filter_info[attr] = repr(
-                                                    value
-                                                )
-
-                                            except Exception:
-                                                pass
-
-                                    filter_details.append(
-                                        filter_info
-                                    )
-
-                                except Exception as exc:
-
-                                    filter_details.append(
-                                        {
-                                            "error": repr(exc),
-                                        }
-                                    )
-
-                        logger.info(
-                            "[HANDLER %03d] "
-                            "handler=%s "
-                            "module=%s "
-                            "filters=%s",
-                            index,
-                            callback_name,
-                            callback_module,
-                            filter_details,
-                        )
-
-                    except Exception:
-
-                        logger.exception(
-                            "[HANDLER %03d] inspection failed",
-                            index,
-                        )
-
-        elif getattr(
-            update,
-            "callback_query",
-            None,
-        ):
-
-            callback = update.callback_query
-
-            logger.info(
-                "[UPDATE CALLBACK] "
-                "user_id=%s data=%r",
-                getattr(
-                    callback.from_user,
-                    "id",
-                    None,
-                ),
-                getattr(
-                    callback,
-                    "data",
-                    None,
-                ),
-            )
-
-        elif getattr(
-            update,
-            "inline_query",
-            None,
-        ):
-
-            inline = update.inline_query
-
-            logger.info(
-                "[UPDATE INLINE] "
-                "user_id=%s query=%r",
-                getattr(
-                    inline.from_user,
-                    "id",
-                    None,
-                ),
-                getattr(
-                    inline,
-                    "query",
-                    None,
-                ),
-            )
-
-        else:
-
-            detected = []
-
-            for name in (
-                "edited_message",
-                "channel_post",
-                "edited_channel_post",
-                "my_chat_member",
-                "chat_member",
-                "poll",
-                "poll_answer",
-            ):
-
-                if getattr(
-                    update,
-                    name,
-                    None,
-                ) is not None:
-
-                    detected.append(name)
-
-            logger.info(
-                "[UPDATE OTHER] attributes=%s",
-                detected,
-            )
+                logger.exception(
+                    "[HANDLERS] "
+                    "failed inspecting handler=%d",
+                    index,
+                )
 
     except Exception:
 
         logger.exception(
-            "[UPDATE INSPECT] failed"
+            "[HANDLERS] handler dump FAILED"
         )
 
-    # --------------------------------------------------------
-    # Let aiogram actually process the update
-    # --------------------------------------------------------
+
+# ============================================================
+# FILTER MATCH DIAGNOSTIC
+# ============================================================
+
+async def _trace_start_filters(
+    dispatcher,
+    message,
+):
+
+    logger.info(
+        "[FILTER TRACE] "
+        "testing message text=%r",
+        getattr(
+            message,
+            "text",
+            None,
+        ),
+    )
 
     try:
 
-    # ========================================================
-# FILTER MATCH DIAGNOSTIC
-# ========================================================
+        handlers_container = getattr(
+            dispatcher,
+            "message_handlers",
+            None,
+        )
 
-if getattr(update, "message", None):
+        handlers = getattr(
+            handlers_container,
+            "handlers",
+            None,
+        )
 
-    message = update.message
+        if not handlers:
 
-    logger.info(
-        "[FILTER TRACE] testing message text=%r",
-        getattr(message, "text", None),
-    )
+            logger.warning(
+                "[FILTER TRACE] "
+                "no message handlers found"
+            )
 
-    handlers_container = getattr(
-        self,
-        "message_handlers",
-        None,
-    )
-
-    handlers = getattr(
-        handlers_container,
-        "handlers",
-        None,
-    )
-
-    if handlers:
+            return
 
         for index, handler in enumerate(handlers):
 
-            callback = getattr(
-                handler,
-                "handler",
-                None,
-            )
+            try:
 
-            if callback is None:
                 callback = getattr(
                     handler,
-                    "callback",
+                    "handler",
                     None,
                 )
 
-            callback_name = getattr(
-                callback,
-                "__qualname__",
-                repr(callback),
-            )
+                if callback is None:
 
-            # فقط Handlerهای مربوط به start را بررسی کنیم
-            if callback_name != "_production_start":
-                continue
-
-            logger.info(
-                "[FILTER TRACE] handler=%03d callback=%s",
-                index,
-                callback_name,
-            )
-
-            filters = getattr(
-                handler,
-                "filters",
-                None,
-            )
-
-            if not filters:
-                logger.info(
-                    "[FILTER TRACE] handler=%03d has no filters",
-                    index,
-                )
-                continue
-
-            for filter_index, filter_obj in enumerate(filters):
-
-                try:
-
-                    filter_instance = getattr(
-                        filter_obj,
-                        "filter",
+                    callback = getattr(
+                        handler,
+                        "callback",
                         None,
                     )
 
-                    filter_kwargs = getattr(
-                        filter_obj,
-                        "kwargs",
-                        {},
-                    )
+                callback_name = getattr(
+                    callback,
+                    "__qualname__",
+                    repr(callback),
+                )
 
-                    filter_name = (
-                        type(filter_instance).__name__
-                        if filter_instance is not None
-                        else "UNKNOWN"
-                    )
+                # فقط _production_start
+                if callback_name != "_production_start":
+                    continue
+
+                logger.info(
+                    "[FILTER TRACE] "
+                    "handler=%03d callback=%s",
+                    index,
+                    callback_name,
+                )
+
+                filters = getattr(
+                    handler,
+                    "filters",
+                    None,
+                )
+
+                if not filters:
 
                     logger.info(
                         "[FILTER TRACE] "
-                        "handler=%03d filter=%d type=%s kwargs=%r",
+                        "handler=%03d has no filters",
                         index,
-                        filter_index,
-                        filter_name,
-                        filter_kwargs,
                     )
 
-                    if filter_instance is None:
-                        continue
+                    continue
 
-                    check_method = getattr(
-                        filter_instance,
-                        "check",
-                        None,
-                    )
-
-                    if check_method is None:
-                        logger.info(
-                            "[FILTER TRACE] "
-                            "handler=%03d filter=%d "
-                            "NO_CHECK_METHOD",
-                            index,
-                            filter_index,
-                        )
-                        continue
+                for filter_index, filter_obj in enumerate(filters):
 
                     try:
 
-                        filter_result = await check_method(
-                            message,
-                            **filter_kwargs,
+                        filter_instance = getattr(
+                            filter_obj,
+                            "filter",
+                            None,
+                        )
+
+                        filter_kwargs = getattr(
+                            filter_obj,
+                            "kwargs",
+                            {},
+                        )
+
+                        filter_name = (
+                            type(filter_instance).__name__
+                            if filter_instance is not None
+                            else "UNKNOWN"
                         )
 
                         logger.info(
                             "[FILTER TRACE] "
-                            "handler=%03d filter=%d "
-                            "type=%s RESULT=%r",
+                            "handler=%03d "
+                            "filter=%d "
+                            "type=%s "
+                            "kwargs=%r",
                             index,
                             filter_index,
                             filter_name,
-                            filter_result,
+                            filter_kwargs,
                         )
 
-                    except TypeError:
+                        if filter_instance is None:
+
+                            logger.info(
+                                "[FILTER TRACE] "
+                                "handler=%03d "
+                                "filter=%d "
+                                "NO_FILTER_INSTANCE",
+                                index,
+                                filter_index,
+                            )
+
+                            continue
+
+                        check_method = getattr(
+                            filter_instance,
+                            "check",
+                            None,
+                        )
+
+                        if check_method is None:
+
+                            logger.info(
+                                "[FILTER TRACE] "
+                                "handler=%03d "
+                                "filter=%d "
+                                "type=%s "
+                                "NO_CHECK_METHOD",
+                                index,
+                                filter_index,
+                                filter_name,
+                            )
+
+                            continue
+
+                        # ------------------------------------------------
+                        # Try check(message, **kwargs)
+                        # ------------------------------------------------
+
+                        try:
+
+                            filter_result = await check_method(
+                                message,
+                                **filter_kwargs,
+                            )
+
+                            logger.info(
+                                "[FILTER TRACE] "
+                                "handler=%03d "
+                                "filter=%d "
+                                "type=%s "
+                                "RESULT=%r",
+                                index,
+                                filter_index,
+                                filter_name,
+                                filter_result,
+                            )
+
+                            continue
+
+                        except TypeError as first_error:
+
+                            logger.info(
+                                "[FILTER TRACE] "
+                                "handler=%03d "
+                                "filter=%d "
+                                "type=%s "
+                                "first_check_TypeError=%r",
+                                index,
+                                filter_index,
+                                filter_name,
+                                first_error,
+                            )
+
+                        # ------------------------------------------------
+                        # Fallback: check(message)
+                        # ------------------------------------------------
 
                         try:
 
@@ -506,8 +583,10 @@ if getattr(update, "message", None):
 
                             logger.info(
                                 "[FILTER TRACE] "
-                                "handler=%03d filter=%d "
-                                "type=%s RESULT=%r "
+                                "handler=%03d "
+                                "filter=%d "
+                                "type=%s "
+                                "RESULT=%r "
                                 "(without kwargs)",
                                 index,
                                 filter_index,
@@ -519,8 +598,10 @@ if getattr(update, "message", None):
 
                             logger.exception(
                                 "[FILTER TRACE] "
-                                "handler=%03d filter=%d "
-                                "type=%s CHECK_ERROR",
+                                "handler=%03d "
+                                "filter=%d "
+                                "type=%s "
+                                "CHECK_ERROR",
                                 index,
                                 filter_index,
                                 filter_name,
@@ -530,24 +611,167 @@ if getattr(update, "message", None):
 
                         logger.exception(
                             "[FILTER TRACE] "
-                            "handler=%03d filter=%d "
-                            "type=%s CHECK_ERROR",
+                            "handler=%03d "
+                            "filter=%d "
+                            "INSPECTION_ERROR",
                             index,
                             filter_index,
-                            filter_name,
                         )
 
-                except Exception:
+            except Exception:
 
-                    logger.exception(
-                        "[FILTER TRACE] "
-                        "handler=%03d filter=%d "
-                        "INSPECTION_ERROR",
-                        index,
-                        filter_index,
-                    )
+                logger.exception(
+                    "[FILTER TRACE] "
+                    "handler=%03d "
+                    "HANDLER_INSPECTION_ERROR",
+                    index,
+                )
 
-    
+    except Exception:
+
+        logger.exception(
+            "[FILTER TRACE] "
+            "FAILED"
+        )
+
+
+# ============================================================
+# DISPATCHER.process_update TRACE
+# ============================================================
+
+@wraps(_original_process_update)
+async def _diagnostic_process_update(
+    self,
+    update,
+    *args,
+    **kwargs,
+):
+
+    logger.info(
+        "[PROCESS_UPDATE] "
+        "ENTER update_id=%r",
+        getattr(
+            update,
+            "update_id",
+            None,
+        ),
+    )
+
+    try:
+
+        message = getattr(
+            update,
+            "message",
+            None,
+        )
+
+        if message is not None:
+
+            chat = getattr(
+                message,
+                "chat",
+                None,
+            )
+
+            user = getattr(
+                message,
+                "from_user",
+                None,
+            )
+
+            logger.info(
+                "[UPDATE INSPECT] "
+                "message.text=%r "
+                "chat_id=%r "
+                "user_id=%r "
+                "chat_type=%r",
+                getattr(
+                    message,
+                    "text",
+                    None,
+                ),
+                getattr(
+                    chat,
+                    "id",
+                    None,
+                ),
+                getattr(
+                    user,
+                    "id",
+                    None,
+                ),
+                getattr(
+                    chat,
+                    "type",
+                    None,
+                ),
+            )
+
+            logger.info(
+                "[UPDATE INSPECT] "
+                "message=%r",
+                message,
+            )
+
+        else:
+
+            logger.info(
+                "[UPDATE INSPECT] "
+                "no message object"
+            )
+
+    except Exception:
+
+        logger.exception(
+            "[UPDATE INSPECT] failed"
+        )
+
+    # ========================================================
+    # DUMP ALL HANDLERS
+    # ========================================================
+
+    try:
+
+        _dump_message_handlers(
+            self
+        )
+
+    except Exception:
+
+        logger.exception(
+            "[HANDLERS] dump failed"
+        )
+
+    # ========================================================
+    # FILTER MATCH DIAGNOSTIC
+    # ========================================================
+
+    if getattr(update, "message", None):
+
+        try:
+
+            await _trace_start_filters(
+                self,
+                update.message,
+            )
+
+        except Exception:
+
+            logger.exception(
+                "[FILTER TRACE] "
+                "top-level failure"
+            )
+
+    # ========================================================
+    # ORIGINAL DISPATCH
+    # ========================================================
+
+    logger.info(
+        "[PROCESS_UPDATE] "
+        "calling original Dispatcher.process_update"
+    )
+
+    try:
 
         result = await _original_process_update(
             self,
@@ -558,8 +782,13 @@ if getattr(update, "message", None):
 
         logger.info(
             "[PROCESS_UPDATE DONE] "
-            "update_id=%s result=%r",
-            update_id,
+            "update_id=%r "
+            "result=%r",
+            getattr(
+                update,
+                "update_id",
+                None,
+            ),
             result,
         )
 
@@ -568,9 +797,8 @@ if getattr(update, "message", None):
     except Exception:
 
         logger.exception(
-            "[PROCESS_UPDATE ERROR] "
-            "update_id=%s",
-            update_id,
+            "[PROCESS_UPDATE] "
+            "original process_update FAILED"
         )
 
         raise
@@ -578,17 +806,10 @@ if getattr(update, "message", None):
 
 Dispatcher.process_update = _diagnostic_process_update
 
-logger.info(
-    "[DIAGNOSTIC] Dispatcher.process_update patched"
-)
-
 
 # ============================================================
-# Dispatcher.start_polling
+# DISPATCHER.start_polling TRACE
 # ============================================================
-
-_original_start_polling = Dispatcher.start_polling
-
 
 @wraps(_original_start_polling)
 async def _diagnostic_start_polling(
@@ -597,14 +818,16 @@ async def _diagnostic_start_polling(
     **kwargs,
 ):
 
-    logger.info("=" * 70)
-    logger.info("[DISPATCHER] start_polling ENTER")
     logger.info(
-        "[DISPATCHER] args=%r kwargs=%r",
+        "[DISPATCHER] start_polling ENTER"
+    )
+
+    logger.info(
+        "[DISPATCHER] "
+        "args=%r kwargs=%r",
         args,
         kwargs,
     )
-    logger.info("=" * 70)
 
     try:
 
@@ -615,7 +838,7 @@ async def _diagnostic_start_polling(
         )
 
         logger.info(
-            "[DISPATCHER] start_polling RETURN result=%r",
+            "[DISPATCHER] start_polling EXIT result=%r",
             result,
         )
 
@@ -624,7 +847,7 @@ async def _diagnostic_start_polling(
     except Exception:
 
         logger.exception(
-            "[DISPATCHER] start_polling ERROR"
+            "[DISPATCHER] start_polling FAILED"
         )
 
         raise
@@ -632,79 +855,37 @@ async def _diagnostic_start_polling(
 
 Dispatcher.start_polling = _diagnostic_start_polling
 
+
+# ============================================================
+# BOOT DIAGNOSTICS
+# ============================================================
+
 logger.info(
-    "[DIAGNOSTIC] Dispatcher.start_polling patched"
+    "[DIAG BOOT] diagnostic_polling_launcher.py loaded"
+)
+
+logger.info(
+    "[DIAG BOOT] Python=%s",
+    sys.version,
+)
+
+logger.info(
+    "[DIAG BOOT] sys.argv=%r",
+    sys.argv,
+)
+
+logger.info(
+    "[DIAG BOOT] instrumentation installed"
+)
+
+logger.info(
+    "[DIAG BOOT] launching player_runtime_entry.py"
 )
 
 
 # ============================================================
-# Bot.__init__
+# RUN REAL PRODUCTION ENTRYPOINT
 # ============================================================
-
-_original_bot_init = Bot.__init__
-
-
-@wraps(_original_bot_init)
-def _diagnostic_bot_init(
-    self,
-    *args,
-    **kwargs,
-):
-
-    logger.info(
-        "[BOT INIT] creating Bot args=%r kwargs_keys=%s",
-        args,
-        list(kwargs.keys()),
-    )
-
-    try:
-
-        result = _original_bot_init(
-            self,
-            *args,
-            **kwargs,
-        )
-
-        logger.info(
-            "[BOT INIT] Bot created token_present=%s",
-            bool(
-                getattr(
-                    self,
-                    "token",
-                    None,
-                )
-            ),
-        )
-
-        return result
-
-    except Exception:
-
-        logger.exception(
-            "[BOT INIT] ERROR"
-        )
-
-        raise
-
-
-Bot.__init__ = _diagnostic_bot_init
-
-logger.info(
-    "[DIAGNOSTIC] Bot.__init__ patched"
-)
-
-
-# ============================================================
-# Start production runtime
-# ============================================================
-
-logger.info("=" * 70)
-logger.info(
-    "[DIAGNOSTIC LAUNCHER] "
-    "Loading player_runtime_entry.py"
-)
-logger.info("=" * 70)
-
 
 try:
 
@@ -713,27 +894,23 @@ try:
         run_name="__main__",
     )
 
-except KeyboardInterrupt:
-
-    logger.info(
-        "[DIAGNOSTIC LAUNCHER] KeyboardInterrupt"
-    )
-
 except SystemExit as exc:
 
     logger.info(
-        "[DIAGNOSTIC LAUNCHER] "
-        "SystemExit code=%r",
-        exc.code,
+        "[DIAG BOOT] "
+        "player_runtime_entry exited "
+        "SystemExit=%r",
+        exc,
     )
+
+    raise
 
 except Exception:
 
-    logger.error("=" * 70)
-    logger.error(
-        "[DIAGNOSTIC LAUNCHER] FATAL ERROR"
+    logger.exception(
+        "[DIAG BOOT] "
+        "player_runtime_entry FAILED"
     )
-    logger.error("=" * 70)
 
     traceback.print_exc()
 
@@ -741,9 +918,7 @@ except Exception:
 
 finally:
 
-    logger.info("=" * 70)
     logger.info(
-        "[DIAGNOSTIC LAUNCHER] "
-        "player_runtime_entry.py finished"
+        "[DIAG BOOT] "
+        "diagnostic launcher finished"
     )
-    logger.info("=" * 70)
