@@ -12,7 +12,6 @@ dependencies = [
 ]
 
 # aiogram 2.25.1 declares an overly strict aiohttp<3.9 constraint, while
-# Vercel's supported Python runtime is newer than the Python versions on
 # which aiohttp 3.8.x can be built. aiogram 2.25.1 works with aiohttp 3.9.x;
 # uv override-dependencies intentionally replaces only that stale resolver
 # constraint for the serverless webhook build.
@@ -21,5 +20,3 @@ override-dependencies = [
   "aiohttp>=3.9.5,<4.0",
 ]
 
-[tool.vercel]
-entrypoint = "api.telegram_app:app"
