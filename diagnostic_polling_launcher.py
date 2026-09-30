@@ -3,7 +3,7 @@ import runpy
 import sys
 import traceback
 from functools import wraps
-
+_diagnostic_process_update
 from aiogram import Bot
 from aiogram.dispatcher import Dispatcher
 
@@ -357,6 +357,197 @@ async def _diagnostic_process_update(
     # --------------------------------------------------------
 
     try:
+
+    # ========================================================
+# FILTER MATCH DIAGNOSTIC
+# ========================================================
+
+if getattr(update, "message", None):
+
+    message = update.message
+
+    logger.info(
+        "[FILTER TRACE] testing message text=%r",
+        getattr(message, "text", None),
+    )
+
+    handlers_container = getattr(
+        self,
+        "message_handlers",
+        None,
+    )
+
+    handlers = getattr(
+        handlers_container,
+        "handlers",
+        None,
+    )
+
+    if handlers:
+
+        for index, handler in enumerate(handlers):
+
+            callback = getattr(
+                handler,
+                "handler",
+                None,
+            )
+
+            if callback is None:
+                callback = getattr(
+                    handler,
+                    "callback",
+                    None,
+                )
+
+            callback_name = getattr(
+                callback,
+                "__qualname__",
+                repr(callback),
+            )
+
+            # فقط Handlerهای مربوط به start را بررسی کنیم
+            if callback_name != "_production_start":
+                continue
+
+            logger.info(
+                "[FILTER TRACE] handler=%03d callback=%s",
+                index,
+                callback_name,
+            )
+
+            filters = getattr(
+                handler,
+                "filters",
+                None,
+            )
+
+            if not filters:
+                logger.info(
+                    "[FILTER TRACE] handler=%03d has no filters",
+                    index,
+                )
+                continue
+
+            for filter_index, filter_obj in enumerate(filters):
+
+                try:
+
+                    filter_instance = getattr(
+                        filter_obj,
+                        "filter",
+                        None,
+                    )
+
+                    filter_kwargs = getattr(
+                        filter_obj,
+                        "kwargs",
+                        {},
+                    )
+
+                    filter_name = (
+                        type(filter_instance).__name__
+                        if filter_instance is not None
+                        else "UNKNOWN"
+                    )
+
+                    logger.info(
+                        "[FILTER TRACE] "
+                        "handler=%03d filter=%d type=%s kwargs=%r",
+                        index,
+                        filter_index,
+                        filter_name,
+                        filter_kwargs,
+                    )
+
+                    if filter_instance is None:
+                        continue
+
+                    check_method = getattr(
+                        filter_instance,
+                        "check",
+                        None,
+                    )
+
+                    if check_method is None:
+                        logger.info(
+                            "[FILTER TRACE] "
+                            "handler=%03d filter=%d "
+                            "NO_CHECK_METHOD",
+                            index,
+                            filter_index,
+                        )
+                        continue
+
+                    try:
+
+                        filter_result = await check_method(
+                            message,
+                            **filter_kwargs,
+                        )
+
+                        logger.info(
+                            "[FILTER TRACE] "
+                            "handler=%03d filter=%d "
+                            "type=%s RESULT=%r",
+                            index,
+                            filter_index,
+                            filter_name,
+                            filter_result,
+                        )
+
+                    except TypeError:
+
+                        try:
+
+                            filter_result = await check_method(
+                                message,
+                            )
+
+                            logger.info(
+                                "[FILTER TRACE] "
+                                "handler=%03d filter=%d "
+                                "type=%s RESULT=%r "
+                                "(without kwargs)",
+                                index,
+                                filter_index,
+                                filter_name,
+                                filter_result,
+                            )
+
+                        except Exception:
+
+                            logger.exception(
+                                "[FILTER TRACE] "
+                                "handler=%03d filter=%d "
+                                "type=%s CHECK_ERROR",
+                                index,
+                                filter_index,
+                                filter_name,
+                            )
+
+                    except Exception:
+
+                        logger.exception(
+                            "[FILTER TRACE] "
+                            "handler=%03d filter=%d "
+                            "type=%s CHECK_ERROR",
+                            index,
+                            filter_index,
+                            filter_name,
+                        )
+
+                except Exception:
+
+                    logger.exception(
+                        "[FILTER TRACE] "
+                        "handler=%03d filter=%d "
+                        "INSPECTION_ERROR",
+                        index,
+                        filter_index,
+                    )
+
+    
 
         result = await _original_process_update(
             self,
